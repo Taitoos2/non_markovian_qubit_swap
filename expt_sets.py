@@ -31,7 +31,7 @@ def expt_001_dynamics(
     import math
     import matplotlib.pyplot as plt
     from qnetwork.dde import EmittersInWaveguideDDE
-    from aux_funs import dde_series
+    from aux_funs import dde_series, dde_series_highprecision
     from qnetwork.dde import DDE_analytical
     from qnetwork.ww import EmittersInWaveguideWW
     from qnetwork.multiphoton_ww import EmittersInWaveguideMultiphotonWW, Waveguide
@@ -78,6 +78,7 @@ def expt_001_dynamics(
         )
         setup_dde.evolve(T * tau)
         t_DDE, pop_DDE = setup_dde.n_photons(initial)
+        # DDE analytical
         eta_b = np.exp(1j * phi)
         eta_d = -np.exp(1j * phi)
 
@@ -131,6 +132,10 @@ def expt_001_dynamics(
         markeredgecolor="#af1a2e",
         markeredgewidth=2,
     )
+    g = np.sqrt(gamma / 2)
+    Omega = np.sqrt(8 * g**2)
+    T = 2 * np.pi / Omega
+    ax.axvline(T, linestyle="--", color="black")
     ax.set_xlabel(r"$t/\tau$")
     ax.set_ylabel(r"$\langle \sigma^\dagger \sigma \rangle$")
 
@@ -146,7 +151,7 @@ def expt_001_dynamics(
     eps = -(g**2) * np.sum(1.0 / delta_m)
     pm = np.cos(np.pi * ms)
     # J = -(g**2) * np.sum(pm / delta_m)
-    J = (np.pi * g**2 / FSR) / np.sin(np.pi * delta / FSR)
+    J = (np.pi * g**2 / FSR) / np.sin(np.pi * delta / FSR)  # assmuming infinite modes
     pop_pert = np.stack([np.cos(J * t_TC) ** 2, np.sin(J * t_TC) ** 2], axis=1)
     ax = axs[1]
 
@@ -155,8 +160,8 @@ def expt_001_dynamics(
 
     ax.plot(t_WW / tau, pop_WW[:, 0], color="#0a4570", label=r"$Q_1$: WW")
     ax.plot(t_WW / tau, pop_WW[:, 1], color="#af1a2e", label=r"$Q_2$: WW")
-    ax.plot(t_DDE / tau, pop_DDE[:, 0], "--", color="#055805", label=r"$Q_1$: DDE")
-    ax.plot(t_DDE / tau, pop_DDE[:, 1], "--", color="#055805", label=r"$Q_2$: DDE")
+    ax.plot(t_DDE / tau, pop_dde_ana[:, 0], "--", color="#055805", label=r"$Q_1$: DDE")
+    ax.plot(t_DDE / tau, pop_dde_ana[:, 1], "--", color="#055805", label=r"$Q_2$: DDE")
     ax.plot(
         t_TC / tau,
         pop_TC[:, 0],
@@ -182,7 +187,7 @@ def expt_001_dynamics(
     ax.plot(
         t_TC / tau,
         pop_pert[:, 0],
-        linestyle="none",
+        linestyle="--",
         marker="s",
         markevery=10,
         markerfacecolor="#2bc85d",
@@ -193,7 +198,7 @@ def expt_001_dynamics(
     ax.plot(
         t_TC / tau,
         pop_pert[:, 1],
-        linestyle="none",
+        linestyle="--",
         marker="s",
         markevery=20,
         markerfacecolor="#c51fc2",
@@ -201,15 +206,14 @@ def expt_001_dynamics(
         markeredgewidth=2,
         label=r"$Q_2$: TC_perturbation",
     )
+    Omega = 2 * J
+    T = np.pi / Omega
+    ax.axvline(T, linestyle="--", color="black")
     ax.set_ylabel(r"$\langle \sigma^\dagger \sigma \rangle$")
     ax.legend(loc="upper right")
     ax.set_xlabel(r"$t/\tau$")
     plt.tight_layout()
     plt.show()
-
-
-import numpy as np
-import matplotlib.pyplot as plt
 
 
 def expt_002_perturbation_convergence(
@@ -260,9 +264,9 @@ def expt_002_perturbation_convergence(
 
     for m in sample_m:
         Jm = J_eff(m)
-        ax.plot(t, np.cos(Jm * t) ** 2, label=f"m_max={m}")
+        ax.plot(t, np.cos(Jm * t) ** 2, label=f"nmodes={m}")
 
-    ax.plot(t, np.cos(J_infty * t) ** 2, "k--", linewidth=2, label=r"m_max=$\infty$")
+    ax.plot(t, np.cos(J_infty * t) ** 2, "k--", linewidth=2, label=r"nmodes=$\infty$")
     ax.set_xlabel("t")
     ax.set_ylabel("P1(t)")
     ax.set_title("Dynamics")
@@ -273,153 +277,104 @@ def expt_002_perturbation_convergence(
     plt.show()
 
 
-def expt_003_swapspeed(Delta, gamma_list, tau=1, p_target=0.99, T_max=350):
+def expt_003_swapspeed(Delta, gamma_list, tau=1, T_max=350, n_jobs=8):
     import numpy as np
     import math
     import matplotlib.pyplot as plt
-    from scipy.optimize import minimize_scalar
-    from qnetwork.dde import dde_series
+    from joblib import Parallel, delayed
+    from aux_funs import dde_series
 
-    phi = math.modf(Delta)[0] * np.pi
+    # phase
+    FSR = np.pi / tau
+    delta = math.modf(Delta)[0]
+    phi = delta * FSR * tau
+    eta_b = np.exp(1j * phi)
+    eta_d = -np.exp(1j * phi)
 
-    def p2(gamma, t):
-        eta_b = np.exp(1j * phi)
-        eta_d = -np.exp(1j * phi)
-        cb = dde_series(gamma, tau, t, eta_b)
-        cd = dde_series(gamma, tau, t, eta_d)
-        return np.abs(0.5 * (cb - cd)) ** 2
+    # p2(gamma, t)
+    def make_p2(gamma):
+        cb = lambda t: dde_series(gamma, tau, t, eta_b)[0]
+        cd = lambda t: dde_series(gamma, tau, t, eta_d)[0]
+        return lambda t: np.abs(0.5 * (cb(t) - cd(t))) ** 2
 
-    def find_first_peak(gamma):
-        dt = 0.02
-        Tmax = T_max * tau
-        t_prev, p_prev = 0.0, p2(gamma, 0.0)
+    # very stable binary peak search
+    def binary_peak_search(p2, Tmin, Tmax, n_scan=200, tol=1e-6):
+        # coarse scan
+        ts = np.linspace(Tmin, Tmax, n_scan)
+        vals = np.array([p2(t) for t in ts])
+        idx = np.argmax(vals)
 
-        for k in range(1, int(Tmax / dt) + 1):
-            t = k * dt
-            p = p2(gamma, t)
-            if p >= p_target > p_prev:
-                lo, hi = t_prev, t
-                break
-            t_prev, p_prev = t, p
+        # find a local interval
+        if idx == 0:
+            tL, tR = ts[0], ts[1]
+        elif idx == n_scan - 1:
+            tL, tR = ts[-2], ts[-1]
         else:
-            lo, hi = 0.0, Tmax
+            tL, tR = ts[idx - 1], ts[idx + 1]
 
-        res = minimize_scalar(
-            lambda t: -p2(gamma, t),
-            bounds=(lo, hi),
-            method="bounded",
-        )
-        t_peak = res.x
-        return t_peak, p2(gamma, t_peak)
+        # binary search inside [tL, tR]
+        while (tR - tL) > tol:
+            m1 = tL + (tR - tL) / 3
+            m2 = tR - (tR - tL) / 3
+            if p2(m1) < p2(m2):
+                tL = m1
+            else:
+                tR = m2
+        t_peak = 0.5 * (tL + tR)
+        return t_peak, p2(t_peak)
 
-    t_peaks = []
-    F_list = []
+    # compute Ω for each gamma
+    def compute_single_gamma(gamma):
+        g = np.sqrt(gamma / (2 * tau))
 
-    for gamma in gamma_list:
-        t_peak, F = find_first_peak(gamma)
-        t_peaks.append(t_peak)
-        F_list.append(F)
+        # analytic Omega
+        if delta == 0:
+            Omega = np.sqrt(Delta**2 + 8 * g**2) / 2
+        else:
+            J = (np.pi * g**2 / FSR) / np.sin(np.pi * delta / FSR)
+            Omega = 2 * J
 
-    t_peaks = np.array(t_peaks)
-    F_list = np.array(F_list)
+        T = np.pi / Omega
+        p2 = make_p2(gamma)
 
+        # peak search
+        t_peak, F = binary_peak_search(p2, Tmin=0.5 * T, Tmax=1.9 * T)
+        return g, T, t_peak, F
+
+    # parallel scan
+    results = Parallel(n_jobs=n_jobs)(
+        delayed(compute_single_gamma)(gamma) for gamma in gamma_list
+    )
+
+    # unpack
+    g_list = np.array([r[0] for r in results])
+    T_list = np.array([r[1] for r in results])
+    t_list = np.array([r[2] for r in results])
+    F_list = np.array([r[3] for r in results])
+
+    # plot
     fig, ax = plt.subplots(1, 2, figsize=(10, 4))
 
-    ax[0].plot(gamma_list, t_peaks, "-o")
-    ax[0].set_xlabel("gamma")
-    ax[0].set_ylabel("t_peak")
+    # left: swap speed
+    ax[0].plot(g_list, t_list / tau, "o-", color="#0a4570", label="Swap speed")
+    ax[0].plot(g_list, T_list / tau, "--", label=r"$\pi/\Omega$")
+    ax[0].set_xscale("log")
+    ax[0].set_yscale("log")
+    ax[0].set_xlabel("g")
+    ax[0].set_ylabel("T/τ")
+    ax[0].grid(True)
+    ax[0].legend()
 
-    ax[1].plot(gamma_list, 1 - F_list, "-o")
-    ax[1].set_xlabel("gamma")
+    # right: infidelity
+    ax[1].plot(g_list, 1 - F_list, "o-", color="#0a4570", label="Infidelity")
+    ax[1].set_xscale("log")
+    ax[1].set_yscale("log")
+    ax[1].set_xlabel("g")
     ax[1].set_ylabel("1 - F")
+    ax[1].grid(True)
+    ax[1].legend()
 
     plt.tight_layout()
     plt.show()
 
-    return t_peaks, F_list
-
-
-def expt_003_swapspeed(Delta, gamma_list, tau=1, p_target=0.99, T_max=350, dt0=0.02):
-    import numpy as np, math
-    import matplotlib.pyplot as plt
-    from scipy.optimize import minimize_scalar
-    from qnetwork.dde import dde_series
-
-    phi = math.modf(Delta)[0] * np.pi
-    eta_b, eta_d = np.exp(1j * phi), -np.exp(1j * phi)
-
-    # ---------------------------------------------------------
-    #  p2 with cache
-    # ---------------------------------------------------------
-    p2_cache = {}
-
-    def p2(gamma, t):
-        key = (gamma, t)
-        if key in p2_cache:
-            return p2_cache[key]
-
-        cb = dde_series(gamma, tau, t, eta_b)[0]
-        cd = dde_series(gamma, tau, t, eta_d)[0]
-        val = np.abs(0.5 * (cb - cd)) ** 2
-        p2_cache[key] = val
-        return val
-
-    # ---------------------------------------------------------
-    #  search first peak: reduce calls to p2!
-    # ---------------------------------------------------------
-    def find_first_peak(gamma):
-        t_prev, p_prev = 0.0, p2(gamma, 0.0)
-        dt = dt0
-        t = dt
-        Tmax = T_max * tau
-
-        # --- adaptive coarse scan: speed-up ---
-        while t < Tmax:
-            p = p2(gamma, t)
-            if p >= p_target > p_prev:
-                lo, hi = t_prev, t
-                break
-            t_prev, p_prev = t, p
-            t += dt
-            # accelerate scanning in large T region
-            if t > 50:
-                dt *= 1.05
-        else:
-            lo, hi = 0.0, Tmax
-
-        # --- refine peak ---
-        res = minimize_scalar(
-            lambda x: -p2(gamma, x), bounds=(lo, hi), method="bounded"
-        )
-        return res.x, p2(gamma, res.x)
-
-    # ---------------------------------------------------------
-    #  scan over gamma
-    # ---------------------------------------------------------
-    t_peaks, F_list = [], []
-
-    for gamma in gamma_list:
-        p2_cache.clear()  # avoid cache explosion
-        t_peak, F = find_first_peak(gamma)
-        t_peaks.append(t_peak)
-        F_list.append(F)
-
-    t_peaks = np.array(t_peaks)
-    F_list = np.array(F_list)
-
-    # ---------------------------------------------------------
-    #  plot
-    # ---------------------------------------------------------
-    fig, ax = plt.subplots(1, 2, figsize=(10, 4))
-    ax[0].plot(gamma_list, t_peaks, "-o")
-    ax[0].set_xlabel("gamma")
-    ax[0].set_ylabel("t_peak")
-
-    ax[1].plot(gamma_list, 1 - F_list, "-o")
-    ax[1].set_xlabel("gamma")
-    ax[1].set_ylabel("1 - F")
-
-    plt.tight_layout()
-    plt.show()
-
-    return t_peaks, F_list
+    return t_list, F_list

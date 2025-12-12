@@ -1,4 +1,49 @@
-def dde_series(gamma, tau, t_list, eta, alpha=None, prec=60):
+def dde_series(gamma, tau, t, eta, alpha=None, _poly_cache={}):
+    import numpy as np
+    from numpy.polynomial import Polynomial
+
+    t = np.asarray(t, float)
+    if t.ndim == 0:
+        t = t.reshape(1)
+
+    if alpha is None:
+        alpha = 0.5 * gamma
+
+    result = np.zeros_like(t, dtype=complex)
+
+    N = int(t[-1] // tau)
+
+    key = (tau, N)
+    if key not in _poly_cache:
+        P = Polynomial([1.0])
+        polys = [(P.copy(), None)]
+        for _ in range(1, N + 1):
+            Q = P.integ()
+            P = P + Q
+            polys.append((P.copy(), Q.copy()))
+        _poly_cache[key] = polys
+    polys = _poly_cache[key]
+
+    # leading term
+    result += np.exp(-alpha * t)
+
+    for n in range(1, N + 1):
+        Pn, Qn = polys[n]
+        tn = t - n * tau
+        mask = tn >= 0
+        if not np.any(mask):
+            continue
+
+        x = -gamma * tn[mask]
+
+        term = (eta**n) * np.exp(-alpha * t[mask]) * np.exp(alpha * n * tau) * Qn(x)
+
+        result[mask] += term
+
+    return result
+
+
+def dde_series_highprecision(gamma, tau, t_list, eta, alpha=None, prec=60):
     """
     High-precision analytical series solution of the DDE:
 
