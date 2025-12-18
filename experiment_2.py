@@ -45,4 +45,4 @@ def exp002( t_max: Optional[float] = None ,
 	fig.tight_layout()
 	plt.show()
 
-exp002(t_max=20)
+#exp002(t_max=20)

@@ -1,6 +1,6 @@
 import numpy as np 
 import matplotlib.pyplot as plt 
-from aux_funs import run_ww_simulation,DDE_analytical
+from aux_funs import run_ww_simulation, DDE_analytical
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from qnetwork.tools import set_plot_style
 from typing import Optional
@@ -64,4 +64,4 @@ def exp000(t_max: Optional[float] = None ,
 	
 	plt.show()
 	
-exp000(Delta=50,gamma=0.1,periods_derivative=6,n_steps=2001,n_modes=100)
+#exp000(Delta=50,gamma=0.1,periods_derivative=6,n_steps=2001,n_modes=100)

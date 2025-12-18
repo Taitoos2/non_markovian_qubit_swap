@@ -45,4 +45,4 @@ def exp001( t_max: Optional[float] = None ,
 	fig.tight_layout()
 	plt.show()
 	
-exp001(t_max=20,gamma=1,Delta_list=[1,5,20])
+#exp001(t_max=20,gamma=1,Delta_list=[1,5,20])
