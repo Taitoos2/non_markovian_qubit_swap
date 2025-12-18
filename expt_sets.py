@@ -1,5 +1,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import math
+import scipy
+from joblib import Parallel, delayed
+from numpy.polynomial import Polynomial
+from qnetwork.dde import EmittersInWaveguideDDE
+from qnetwork.ww import EmittersInWaveguideWW
+from qnetwork.multiphoton_ww import EmittersInWaveguideMultiphotonWW, Waveguide
 
 
 def expt_001_dynamics(
@@ -27,14 +34,6 @@ def expt_001_dynamics(
     dt_max: the maximum time step in DDE model
     n_steps: the number of steps in WW model
     """
-    import numpy as np
-    import math
-    import matplotlib.pyplot as plt
-    from qnetwork.dde import EmittersInWaveguideDDE
-    from aux_funs import dde_series, dde_series_highprecision
-    from qnetwork.dde import DDE_analytical
-    from qnetwork.ww import EmittersInWaveguideWW
-    from qnetwork.multiphoton_ww import EmittersInWaveguideMultiphotonWW, Waveguide
 
     # run one simulation for a given Delta
     def run_once(Delta_val):
@@ -64,7 +63,9 @@ def expt_001_dynamics(
                 n_modes=n_modes,
                 setup=Waveguide.Ring if PBC else Waveguide.Cable,
             )
+        print("Starting WW...")
         t_WW, pop_WW = setup_WW.evolve(T * tau, n_steps=n_steps)
+        print("WW finished")
         # DDE
         delta = math.modf(Delta_val)[0]
         phi = delta * setup_WW.FSR * tau
@@ -78,39 +79,41 @@ def expt_001_dynamics(
         )
         setup_dde.evolve(T * tau)
         t_DDE, pop_DDE = setup_dde.n_photons(initial)
+        print("DDE finished")
         # DDE analytical
-        eta_b = np.exp(1j * phi)
-        eta_d = -np.exp(1j * phi)
+        # eta_b = np.exp(1j * phi)
+        # eta_d = -np.exp(1j * phi)
 
-        cb = dde_series(gamma, tau, t_DDE, eta_b)  # bright
-        cd = dde_series(gamma, tau, t_DDE, eta_d)  # dark
-        # cb = DDE_analytical(gamma, phi, tau, t_DDE)  # bright
-        # cd = DDE_analytical(gamma, phi + np.pi, tau, t_DDE)  # dark
+        # cb = dde_series_function(gamma, tau, eta_b, int(t_WW / tau))
+        # cd = dde_series_function(gamma, tau, eta_d, int(t_WW / tau))
 
-        c1 = (cb + cd) / 2.0
-        c2 = (cb - cd) / 2.0
-        P1 = np.abs(c1) ** 2
-        P2 = np.abs(c2) ** 2
+        # c1 = (cb + cd) / 2.0
+        # c2 = (cb - cd) / 2.0
+        # P1 = np.abs(c1) ** 2
+        # P2 = np.abs(c2) ** 2
 
-        pop_dde_ana = np.stack([P1, P2], axis=1)
+        # pop_dde_ana = np.stack([P1, P2], axis=1)
         # TC
         t_TC, pop_TC = setup_dde.evolve_TC(T * tau, initial)
-        return t_WW, pop_WW, t_DDE, pop_DDE, t_TC, pop_TC, pop_dde_ana
+        return t_WW, pop_WW, t_DDE, pop_DDE, t_TC, pop_TC
 
     # Δ = 0 and Δ = input
+    print("test1")
     res0 = run_once(int(Delta))
+    print("test2")
     resD = run_once(Delta)
+    print("test3")
 
     fig, axs = plt.subplots(ncols=2, figsize=(18, 5))
 
     # left: 0 detuning
     ax = axs[0]
     ax.set_title(rf"Dynamics ($\Delta={int(Delta)}*FSR$)")
-    t_WW, pop_WW, t_DDE, pop_DDE, t_TC, pop_TC, pop_dde_ana = res0
+    t_WW, pop_WW, t_DDE, pop_DDE, t_TC, pop_TC = res0
 
     ax.plot(t_WW / tau, pop_WW[:, 0], color="#0a4570", label=r"$Q_1$: WW")
     ax.plot(t_WW / tau, pop_WW[:, 1], color="#af1a2e", label=r"$Q_2$: WW")
-    ax.plot(t_DDE / tau, pop_dde_ana[:, 0], "--", color="#055805", label=r"$Q_1$: DDE")
+    ax.plot(t_DDE / tau, pop_DDE[:, 0], "--", color="#055805", label=r"$Q_1$: DDE")
     ax.plot(t_DDE / tau, pop_DDE[:, 1], "--", color="#055805", label=r"$Q_2$: DDE")
     ax.plot(
         t_TC / tau,
@@ -156,12 +159,12 @@ def expt_001_dynamics(
     ax = axs[1]
 
     ax.set_title(rf"Dynamics ($\Delta={Delta}*FSR$)")
-    t_WW, pop_WW, t_DDE, pop_DDE, t_TC, pop_TC, pop_dde_ana = resD
+    t_WW, pop_WW, t_DDE, pop_DDE, t_TC, pop_TC = resD
 
     ax.plot(t_WW / tau, pop_WW[:, 0], color="#0a4570", label=r"$Q_1$: WW")
     ax.plot(t_WW / tau, pop_WW[:, 1], color="#af1a2e", label=r"$Q_2$: WW")
-    ax.plot(t_DDE / tau, pop_dde_ana[:, 0], "--", color="#055805", label=r"$Q_1$: DDE")
-    ax.plot(t_DDE / tau, pop_dde_ana[:, 1], "--", color="#055805", label=r"$Q_2$: DDE")
+    ax.plot(t_DDE / tau, pop_DDE[:, 0], "--", color="#055805", label=r"$Q_1$: DDE")
+    ax.plot(t_DDE / tau, pop_DDE[:, 1], "--", color="#055805", label=r"$Q_2$: DDE")
     ax.plot(
         t_TC / tau,
         pop_TC[:, 0],
@@ -277,13 +280,38 @@ def expt_002_perturbation_convergence(
     plt.show()
 
 
-def expt_003_swapspeed(Delta, gamma_list, tau=1, T_max=350, n_jobs=8):
-    import numpy as np
-    import math
-    import matplotlib.pyplot as plt
-    from joblib import Parallel, delayed
-    from aux_funs import dde_series
+def dde_series_function(gamma, tau, eta, N, alpha=None):
+    if alpha is None:
+        alpha = 0.5 * gamma
 
+    P = Polynomial([1.0])
+    polys: list[tuple[int, Polynomial]] = []
+    for n in range(1, N + 1):
+        Q = P.integ()
+        P = P + Q
+        polys.append((n, Q))
+
+    def evaluate(t):
+        # leading term
+        result = np.exp(-alpha * t)
+
+        for n, Q in polys:
+            tn = t - n * tau
+            term = (
+                (eta**n)
+                * np.exp(-alpha * t)
+                * np.exp(alpha * n * tau)
+                * Q(-gamma * tn)
+                * np.heaviside(tn, 0.0)
+            )
+            result += term
+
+        return result
+
+    return evaluate
+
+
+def compute_period_and_fidelity(Delta, gamma, tau=1):
     # phase
     FSR = np.pi / tau
     delta = math.modf(Delta)[0]
@@ -292,9 +320,9 @@ def expt_003_swapspeed(Delta, gamma_list, tau=1, T_max=350, n_jobs=8):
     eta_d = -np.exp(1j * phi)
 
     # p2(gamma, t)
-    def make_p2(gamma):
-        cb = lambda t: dde_series(gamma, tau, t, eta_b)[0]
-        cd = lambda t: dde_series(gamma, tau, t, eta_d)[0]
+    def make_p2(gamma, T_max):
+        cb = dde_series_function(gamma, tau, eta_b, int(T_max / tau))
+        cd = dde_series_function(gamma, tau, eta_d, int(T_max / tau))
         return lambda t: np.abs(0.5 * (cb(t) - cd(t))) ** 2
 
     # very stable binary peak search
@@ -323,27 +351,36 @@ def expt_003_swapspeed(Delta, gamma_list, tau=1, T_max=350, n_jobs=8):
         t_peak = 0.5 * (tL + tR)
         return t_peak, p2(t_peak)
 
-    # compute Ω for each gamma
-    def compute_single_gamma(gamma):
-        g = np.sqrt(gamma / (2 * tau))
+    g = np.sqrt(gamma / (2 * tau))
 
-        # analytic Omega
-        if delta == 0:
-            Omega = np.sqrt(Delta**2 + 8 * g**2) / 2
-        else:
-            J = (np.pi * g**2 / FSR) / np.sin(np.pi * delta / FSR)
-            Omega = 2 * J
+    # analytic Omega
+    if delta == 0:
+        Omega = np.sqrt(Delta**2 + 8 * g**2) / 2
+    else:
+        J = (np.pi * g**2 / FSR) / np.sin(np.pi * delta / FSR)
+        Omega = 2 * J
 
-        T = np.pi / Omega
-        p2 = make_p2(gamma)
+    T = np.pi / Omega
+    p2 = make_p2(gamma, 1.9 * T)
 
-        # peak search
+    # peak search
+    if False:
         t_peak, F = binary_peak_search(p2, Tmin=0.5 * T, Tmax=1.9 * T)
-        return g, T, t_peak, F
+    elif False:
+        res = scipy.optimize.minimize(lambda t: -p2(t), T, bounds=(0.5 * T, 1.9 * T))
+        t_peak, F = res.x, res.fun
+    else:
+        res = scipy.optimize.minimize_scalar(
+            lambda t: -p2(t), bounds=(0.5 * T, 1.9 * T)
+        )
+        t_peak, F = res.x, -res.fun
+    return g / FSR, T, t_peak, F
 
+
+def expt_003_swapspeed(Delta, gamma_list, tau=1, T_max=350, n_jobs=8):
     # parallel scan
     results = Parallel(n_jobs=n_jobs)(
-        delayed(compute_single_gamma)(gamma) for gamma in gamma_list
+        delayed(compute_period_and_fidelity)(Delta, gamma, tau) for gamma in gamma_list
     )
 
     # unpack
@@ -360,7 +397,7 @@ def expt_003_swapspeed(Delta, gamma_list, tau=1, T_max=350, n_jobs=8):
     ax[0].plot(g_list, T_list / tau, "--", label=r"$\pi/\Omega$")
     ax[0].set_xscale("log")
     ax[0].set_yscale("log")
-    ax[0].set_xlabel("g")
+    ax[0].set_xlabel("g/FSR")
     ax[0].set_ylabel("T/τ")
     ax[0].grid(True)
     ax[0].legend()
@@ -374,7 +411,17 @@ def expt_003_swapspeed(Delta, gamma_list, tau=1, T_max=350, n_jobs=8):
     ax[1].grid(True)
     ax[1].legend()
 
-    plt.tight_layout()
+    fig.tight_layout()
     plt.show()
 
     return t_list, F_list
+
+
+# if True:
+#     gamma_list = np.linspace(0.01, 0.1, 100)
+#     t_peaks, F_list = expt_003_swapspeed(
+#         Delta=0,
+#         gamma_list=gamma_list,
+#     )
+# else:
+#     print(compute_period_and_fidelity(Delta=0, gamma=0.01))
