@@ -571,11 +571,83 @@ def compute_last_state(
     c: float = 1.0,
     PBC: bool = True,
     multiphoton: bool = False,
-    T: float = 100.0,
-    dt_max: float = 0.01,
+    T: float = 1.0,
     n_steps: int = 101,
 ):
-    """This function mainly compares the dynamics of the DDE , WW model ,TC model, and pertubation result for a given parametters.
+    if PBC:
+        L = 2 * tau * c
+        positions = [0, L / 2]
+    else:
+        L = tau * c
+        positions = [0, L]
+    initial_state = "10"
+    # WW
+    period = np.pi / (np.sqrt(8 * (gamma / (2 * tau))))
+    times = np.linspace(0, T * period, n_steps)
+    if multiphoton:
+        setup_WW = EmittersInWaveguideMultiphotonWW(
+            Delta=Delta,
+            positions=positions,
+            gamma=0,
+            n_modes=n_modes,
+            L=L,
+            setup=Waveguide.Ring if PBC else Waveguide.Cable,
+        )
+    else:
+        setup_WW = EmittersInWaveguideWW(
+            Delta=Delta,
+            positions=positions,
+            gamma=0,
+            L=L,
+            n_modes=n_modes,
+            setup=Waveguide.Ring if PBC else Waveguide.Cable,
+        )
+
+    psi = setup_WW.initial_state(0)
+    pop_WW = []
+    for i, t in enumerate(times):
+        from scipy.sparse import csr_array, diags_array, block_array
+        from scipy.sparse.linalg import expm_multiply
+
+        positions = np.asarray(positions, float)
+        pref = np.sqrt(gamma / (2 * L))
+
+        g = (
+            pref
+            * np.array(
+                [
+                    np.sin(np.pi * t / (2 * T * period)),
+                    np.cos(np.pi * t / (2 * T * period)),
+                ]
+            )[:, None]
+        )  # (2,1)
+
+        gk = g * np.exp(-1j * positions[:, None] * setup_WW.k[None, :])
+        # shape: (2, N)
+
+        A00 = diags_array(setup_WW.Delta, offsets=0)
+        A11 = diags_array(setup_WW.wk, offsets=0)
+        A01 = csr_array(gk)
+        A10 = A01.T.conjugate()
+        Hamiltonian = block_array([[A00, A01], [A10, A11]], format="csr")
+        idtH = Hamiltonian * (-1j * (times[1] - times[0]))
+        psi = expm_multiply(idtH, psi)
+        pop_WW.append(np.abs(psi[:2]) ** 2)
+    return np.abs(psi[1]) ** 2
+
+
+def expt_006_stirap(
+    Delta: float = 0.0,
+    gamma_list: list | np.ndarray = np.linspace(0.01, 0.2, 20),
+    tau: float = 50.0,
+    n_modes: int = 50,
+    c: float = 1.0,
+    PBC: bool = True,
+    multiphoton: bool = False,
+    T: float = 100.0,
+    n_steps: int = 101,
+):
+    """This function simulates the STIRAP-like process in waveguide QED system.
     Parameters:
     Delta: emitters frequency, we should use FSR*Delta in simulation
     gamma: decay rate
@@ -585,186 +657,33 @@ def compute_last_state(
     PBC: Periodic boundary condition or not
     multiphoton: one or more photon
     T: the total time, we should use T*tau in simulation
-    dt_max: the maximum time step in DDE model
     n_steps: the number of steps in WW model
     """
-
-    # run one simulation for a given Delta
-    def run_once(Delta_val):
-        if PBC:
-            L = 2 * tau * c
-            positions = [0, L / 2]
-        else:
-            L = tau * c
-            positions = [0, L]
-        initial = "10"
-        # WW
-        if multiphoton:
-            setup_WW = EmittersInWaveguideMultiphotonWW(
-                Delta=Delta_val,
-                positions=positions,
-                gamma=gamma,
-                n_modes=n_modes,
-                L=L,
-                setup=Waveguide.Ring if PBC else Waveguide.Cable,
-            )
-        else:
-            setup_WW = EmittersInWaveguideWW(
-                Delta=Delta_val,
-                positions=positions,
-                gamma=gamma,
-                L=L,
-                n_modes=n_modes,
-                setup=Waveguide.Ring if PBC else Waveguide.Cable,
-            )
-        t_WW, pop_WW = setup_WW.evolve(T * tau, n_steps=n_steps)
-        # DDE
-        delta = math.modf(Delta_val)[0]
-        phi = delta * setup_WW.FSR * tau
-        setup_dde = EmittersInWaveguideDDE(
-            phi=phi,
-            N=2,
+    Fidelity = []
+    for gamma in gamma_list:
+        last_pop = compute_last_state(
+            Delta=Delta,
             gamma=gamma,
-            U=-1,
             tau=tau,
-            dt_max=dt_max,
+            n_modes=n_modes,
+            c=c,
+            PBC=PBC,
+            multiphoton=multiphoton,
+            T=T,
+            n_steps=n_steps,
         )
-        setup_dde.evolve(T * tau)
-        t_DDE, pop_DDE = setup_dde.n_photons(initial)
-
-        # DDE analytical
-        # eta_b = np.exp(1j * phi)
-        # eta_d = -np.exp(1j * phi)
-
-        # cb = dde_series_function(gamma, tau, eta_b, int(t_WW / tau))
-        # cd = dde_series_function(gamma, tau, eta_d, int(t_WW / tau))
-
-        # c1 = (cb + cd) / 2.0
-        # c2 = (cb - cd) / 2.0
-        # P1 = np.abs(c1) ** 2
-        # P2 = np.abs(c2) ** 2
-
-        # pop_dde_ana = np.stack([P1, P2], axis=1)
-        # TC
-        t_TC, pop_TC = setup_dde.evolve_TC(T * tau, initial)
-        return t_WW, pop_WW, t_DDE, pop_DDE, t_TC, pop_TC
-
-    # Δ = 0 and Δ = input
-    res0 = run_once(int(Delta))
-    resD = run_once(Delta)
-
-    fig, axs = plt.subplots(ncols=2, figsize=(18, 5))
-
-    # left: 0 detuning
-    ax = axs[0]
-    ax.set_title(rf"Dynamics ($\Delta={int(Delta)}*FSR$)")
-    t_WW, pop_WW, t_DDE, pop_DDE, t_TC, pop_TC = res0
-
-    ax.plot(t_WW / tau, pop_WW[:, 0], color="#0a4570", label=r"$Q_1$: WW")
-    ax.plot(t_WW / tau, pop_WW[:, 1], color="#af1a2e", label=r"$Q_2$: WW")
-    ax.plot(t_DDE / tau, pop_DDE[:, 0], "--", color="#055805", label=r"$Q_1$: DDE")
-    ax.plot(t_DDE / tau, pop_DDE[:, 1], "--", color="#055805", label=r"$Q_2$: DDE")
-    ax.plot(
-        t_TC / tau,
-        pop_TC[:, 0],
-        linestyle="none",
-        marker="s",
-        markevery=20,
-        markerfacecolor="#3c91ce",
-        markeredgecolor="#0a4570",
-        markeredgewidth=2,
+        Fidelity.append(last_pop)
+    plt.plot(
+        np.sqrt(np.asarray(gamma_list) / (2 * tau)) / np.pi,
+        1 - np.asarray(Fidelity),
+        "o-",
+        color="#0a4570",
+        label="Fidelity",
     )
-    ax.plot(
-        t_TC / tau,
-        pop_TC[:, 1],
-        linestyle="none",
-        marker="s",
-        markevery=20,
-        markerfacecolor="#e02e46",
-        markeredgecolor="#af1a2e",
-        markeredgewidth=2,
-    )
-    g = np.sqrt(gamma / 2)
-    Omega = np.sqrt(8 * g**2)
-    T = 2 * np.pi / Omega
-    ax.axvline(T, linestyle="--", color="black")
-    ax.axvline(2 * T, linestyle="--", color="black")
-    ax.axvline(3 * T, linestyle="--", color="black")
-    ax.set_xlabel(r"$t/\tau$")
-    ax.set_ylabel(r"$\langle \sigma^\dagger \sigma \rangle$")
-
-    # right: large detuning
-
-    # perturbation
-    m_max = n_modes
-    FSR = np.pi / tau
-    delta = math.modf(Delta)[0] * FSR
-    g = np.sqrt(gamma / (tau * 2))
-    ms = np.arange(-m_max, m_max)
-    delta_m = ms * FSR - delta
-    eps = -(g**2) * np.sum(1.0 / delta_m)
-    pm = np.cos(np.pi * ms)
-    # J = -(g**2) * np.sum(pm / delta_m)
-    J = (np.pi * g**2 / FSR) / np.sin(np.pi * delta / FSR)  # assmuming infinite modes
-    pop_pert = np.stack([np.cos(J * t_TC) ** 2, np.sin(J * t_TC) ** 2], axis=1)
-    ax = axs[1]
-
-    ax.set_title(rf"Dynamics ($\Delta={Delta}*FSR$)")
-    t_WW, pop_WW, t_DDE, pop_DDE, t_TC, pop_TC = resD
-
-    ax.plot(t_WW / tau, pop_WW[:, 0], color="#0a4570", label=r"$Q_1$: WW")
-    ax.plot(t_WW / tau, pop_WW[:, 1], color="#af1a2e", label=r"$Q_2$: WW")
-    ax.plot(t_DDE / tau, pop_DDE[:, 0], "--", color="#055805", label=r"$Q_1$: DDE")
-    ax.plot(t_DDE / tau, pop_DDE[:, 1], "--", color="#055805", label=r"$Q_2$: DDE")
-    ax.plot(
-        t_TC / tau,
-        pop_TC[:, 0],
-        linestyle="none",
-        marker="s",
-        markevery=10,
-        markerfacecolor="#3c91ce",
-        markeredgecolor="#0a4570",
-        markeredgewidth=2,
-        label=r"$Q_1$: TC_one_mode",
-    )
-    ax.plot(
-        t_TC / tau,
-        pop_TC[:, 1],
-        linestyle="none",
-        marker="s",
-        markevery=20,
-        markerfacecolor="#e02e46",
-        markeredgecolor="#af1a2e",
-        markeredgewidth=2,
-        label=r"$Q_2$: TC_one_mode",
-    )
-    ax.plot(
-        t_TC / tau,
-        pop_pert[:, 0],
-        linestyle="--",
-        marker="s",
-        markevery=10,
-        markerfacecolor="#2bc85d",
-        markeredgecolor="#054a1b",
-        markeredgewidth=2,
-        label=r"$Q_1$: TC_perturbation",
-    )
-    ax.plot(
-        t_TC / tau,
-        pop_pert[:, 1],
-        linestyle="--",
-        marker="s",
-        markevery=20,
-        markerfacecolor="#c51fc2",
-        markeredgecolor="#580a57",
-        markeredgewidth=2,
-        label=r"$Q_2$: TC_perturbation",
-    )
-    Omega = 2 * J
-    T = np.pi / Omega
-    ax.axvline(T, linestyle="--", color="black")
-    ax.set_ylabel(r"$\langle \sigma^\dagger \sigma \rangle$")
-    ax.legend(loc="upper right")
-    ax.set_xlabel(r"$t/\tau$")
-    plt.tight_layout()
+    plt.xlabel("g/FSR")
+    plt.ylabel("1 - F")
+    plt.yscale("log")
+    plt.xscale("log")
+    plt.grid(True)
+    plt.legend()
     plt.show()
