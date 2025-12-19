@@ -155,3 +155,65 @@ def run_ww_simulation(t_max: Optional[float] = None , gamma :float = 0.1, Delta:
 	setup=EmittersInWaveguideMultiphotonWW(gamma=gamma,Delta=Delta,L=L,c=c,positions=[0.0], n_modes=n_modes, n_excitations=list(range(2)))
 	t,e = setup.evolve(t_max,n_steps=n_steps,initial_state="1")
 	return t,e[:,0]
+
+# --------------------------------------------------------------------------------
+
+def two_qubits_analytical(t_max: float = 20,
+                        n_steps: int = 201,
+                        gamma: float = 0.1,
+                        phi: float = 2*np.pi, 
+                        tau : float = 2,
+                        initial: np.ndarray = np.asarray([0,1,0,0])):
+     
+	t = np.linspace(0,t_max,n_steps)
+	b = np.asarray([[0,0],[1,0]])
+	b1 = np.kron(b,np.eye(2))
+	b2 = np.kron(np.eye(2),b)
+
+	c_plus = DDE_analytical(gamma=gamma,phi=phi,tau=tau,t=t)
+	c_minus = DDE_analytical(gamma=gamma,phi=phi + np.pi,tau=tau,t=t) * np.exp(1j*np.pi/tau*t)
+
+	sum = 0.5*(c_plus+c_minus)
+	dif = 0.5*(c_plus-c_minus)
+
+	pop1 = (np.abs(sum)**2)*np.dot(initial,b1.T@b1@initial).astype(complex)
+	pop1+= np.conjugate(sum)*dif*np.dot(initial,b1.T@b2@initial)
+	pop1+= np.conjugate(dif)*sum*np.dot(initial,b2.T@b1@initial)
+	pop1+= (np.abs(dif)**2)*np.dot(initial,b2.T@b2@initial)
+
+	pop2 = (np.abs(dif)**2)*np.dot(initial,b1.T@b1@initial).astype(complex)
+	pop2+= np.conjugate(dif)*sum*np.dot(initial,b1.T@b2@initial)
+	pop2+= np.conjugate(sum)*dif*np.dot(initial,b2.T@b1@initial)
+	pop2+= (np.abs(sum)**2)*np.dot(initial,b2.T@b2@initial)
+	return t,[np.abs(pop1),np.abs(pop2)]
+
+
+def two_qubits_analytical_Hong(t_max: float = 20,
+						  n_steps: int = 201,
+						  gamma: float = 0.1,
+						  phi: float = 2*np.pi, 
+						  L:float =1,
+						  c: float = 1,
+						  initial: np.ndarray = np.asarray([0,1,0,0])):
+	tau = L/c
+	t = np.linspace(0,t_max,n_steps)
+	b = np.asarray([[0,0],[1,0]])
+	b1 = np.kron(b,np.eye(2))
+	b2 = np.kron(np.eye(2),b)
+
+	c_plus = dde_series(gamma=gamma,tau=tau,eta=np.exp(1j*phi),t=t)
+	c_minus = dde_series(gamma=gamma,tau=tau,eta=-np.exp(1j*phi),t=t)
+
+	sum = 0.5*(c_plus+c_minus)
+	dif = 0.5*(c_plus-c_minus)
+
+	pop1 = (np.abs(sum)**2)*np.dot(initial,b1.T@b1@initial).astype(complex)
+	pop1+= np.conjugate(sum)*dif*np.dot(initial,b1.T@b2@initial)
+	pop1+= np.conjugate(dif)*sum*np.dot(initial,b2.T@b1@initial)
+	pop1+= (np.abs(dif)**2)*np.dot(initial,b2.T@b2@initial)
+
+	pop2 = (np.abs(dif)**2)*np.dot(initial,b1.T@b1@initial).astype(complex)
+	pop2+= np.conjugate(dif)*sum*np.dot(initial,b1.T@b2@initial)
+	pop2+= np.conjugate(sum)*dif*np.dot(initial,b2.T@b1@initial)
+	pop2+= (np.abs(sum)**2)*np.dot(initial,b2.T@b2@initial)
+	return t,[np.abs(pop1),np.abs(pop2)]
