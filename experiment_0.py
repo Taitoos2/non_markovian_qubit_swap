@@ -39,12 +39,14 @@ def exp000(t_max: Optional[float] = None ,
 	axs[0].set_title(r"$\langle \sigma^{+}\sigma^{-} \rangle $")
 
 	axins = inset_axes(axs[0],width="30%",height="30%",loc="upper right")
+	idx = np.argmin(np.abs(t - 3*tau))
+	e_dde_3 = e_dde[idx]
 	axins.plot(t/tau,e_ww,label='WW')
 	axins.plot(t/tau,e_dde,'r--',label='DDE')
 	axins.plot(t/tau,np.exp(-gamma*t),'k-.',label=r"$ e^{-\gamma t} $")
 	axins.set_yscale('log')
 	axins.set_xlim(0.1,3.1)
-	axins.set_ylim(0.2,1)
+	axins.set_ylim(e_dde_3,1)
 	#axins.legend()
 	axins.set_yscale('log')
 	for i in range(1,4):

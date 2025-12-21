@@ -31,15 +31,14 @@ def exp001( t_max: Optional[float] = None ,
 	if fancy_bool:
 		set_plot_style()
 
-	fig,ax = plt.subplots(figsize=(8,6))
+	fig,axs = plt.subplots(1,len(Delta_list),figsize=(6*len(Delta_list),6))
 	
 	for i,Delta in enumerate(Delta_list):
 		t,e_ww = run_ww_simulation(t_max=t_max,gamma=gamma,Delta=Delta,L=L,c=c,n_modes=n_modes,n_steps=n_steps)
-		ax.plot(gamma*t,e_ww,label=rf"$\Delta = {Delta:.1f} \omega_{0}$")
-
-	ax.plot(gamma*t_dde,e_dde,'v', markevery=int(n_steps/100),label='DDE')
-	ax.set_xlabel(r"$\gamma t$")
-	ax.set_title(r"$\langle \sigma^{+} \sigma^{-} \rangle$")
+		axs[i].plot(gamma*t,e_ww,label=rf"$\Delta = {Delta:.1f} \omega_{0}$")
+		axs[i].plot(gamma*t_dde,e_dde,'v', markevery=int(n_steps/50),label='DDE')
+		axs[i].set_xlabel(r"$\gamma t$")
+		axs[i].set_title(rf"$ \Delta = {Delta:.0f} $ FSR ")
 	# ax.legend()
 	
 	fig.tight_layout()
