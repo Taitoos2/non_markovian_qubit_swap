@@ -236,3 +236,13 @@ def two_qubits_analytical_Hong(t_max: float = 20,
 	pop2+= np.conjugate(sum)*dif*np.dot(initial,b2.T@b1@initial)
 	pop2+= (np.abs(sum)**2)*np.dot(initial,b2.T@b2@initial)
 	return t,[np.abs(pop1),np.abs(pop2)]
+
+## -------------------------------------
+
+from joblib import Parallel, delayed 
+
+def paralelizar(parameter_list,f,ncores: int = 80):
+	resultados = Parallel(n_jobs=ncores, backend='loky')(
+		delayed(f)(param) for param in parameter_list
+	)
+	return resultados
