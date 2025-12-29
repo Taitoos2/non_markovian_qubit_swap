@@ -241,7 +241,7 @@ def two_qubits_analytical_Hong(t_max: float = 20,
 
 from joblib import Parallel, delayed 
 
-def paralelizar(parameter_list,f,ncores: int = 80):
+def paralelizar(parameter_list,f,ncores: int = 10):
 	resultados = Parallel(n_jobs=ncores, backend='loky')(
 		delayed(f)(param) for param in parameter_list
 	)

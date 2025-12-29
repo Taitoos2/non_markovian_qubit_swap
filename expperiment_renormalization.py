@@ -17,7 +17,12 @@ def parameter_correction(gamma:float,
 	def min_estimation(Delta):
 		_,e = run_ww_simulation(t_max=0.75*T,gamma = gamma,Delta=Delta,L=L,c=c,n_modes=n_modes,n_steps=n_steps)
 		return np.min(e)
-	res = minimize(min_estimation,x0=Delta,bounds=[(Delta-0.6,Delta+0.6)])
+	res = minimize(min_estimation,
+				x0=Delta,
+				bounds=[(Delta-0.6,Delta+0.6)],
+				method="Nelder-Mead",)
+				# options={"xatol": 1e-8,"fatol": 1e-8})
+	
 	t_op,e_op = run_ww_simulation(t_max=3*T,gamma=gamma,Delta=res.x[0],L=L,c=c,n_modes=n_modes,n_steps=n_steps)
 	
 	def dde_correction_estimation(gamma):
@@ -103,12 +108,18 @@ def exp006(Delta_0:Optional[float] = 1,
 	axs[0].set_title(r'$\Delta_{LS} / $fsr')
 	axs[0].plot(x,lamb_shift,'-o',label='data')
 	axs[0].set_xlabel(xlab)
+	axs[0].set_yscale('log')
+	axs[0].set_xscale('log')
 
 
 	axs[1].set_title(r"$\delta \gamma/ \gamma $")
 	axs[1].plot(x,gamma_shift,'-o',label='data')
 	axs[1].set_xlabel(xlab)
+	axs[1].set_yscale('log')
+	axs[1].set_xscale('log')
 
 	fig.tight_layout()
 	plt.show()
 	return lamb_shift,gamma_shift
+
+#exp006(Delta_0=1,n_steps=1001)
