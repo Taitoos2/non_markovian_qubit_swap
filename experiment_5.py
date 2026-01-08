@@ -1,4 +1,5 @@
 import numpy as np 
+import matplotlib.pyplot as plt 
 from numpy.fft import fft, fftfreq,fftshift
 from aux_funs import paralelizar,run_ww_simulation
 from scipy.interpolate import interp1d
@@ -62,7 +63,8 @@ def estimate_frequency_L2(gamma:float=0.1,
 						L:float=1,
 						c:float=1,
 						n_modes:int=40,
-						n_steps:int=1001):
+						n_steps:int=1001,
+						opt_method:str = 'TNC'):
 	''' Also estimating the frequency, but now minimizing the L2 error with a scipy tool.  '''
 
 	T = 2*np.pi*np.sqrt(2*L/(gamma*c))
@@ -74,8 +76,8 @@ def estimate_frequency_L2(gamma:float=0.1,
 		y = np.cos(freq*t)**2
 		return L2_error(t,y,e)
 	
-	w = minimize(fun=sample_function,x0=np.sqrt(gamma/(2*L/c)),method='TNC')
-	print('estimated frequency: '+str(np.round(w.x,5)))
+	w = minimize(fun=sample_function,x0=np.sqrt(gamma/(2*L/c)),method=opt_method)
+	
 	return w.x
 
 # ----------------------------------------------------------------------------------------------------
@@ -87,7 +89,7 @@ def exp005( gamma_list: list = list(np.linspace(0.01,0.1,20)),
 			c:float=1,
 			n_modes: int = 50,
 			n_steps:int = 1001,
-			estimation_method: str = 'L2'): 
+			L2_method: str = 'TNC'): 
 	
 	''' The idea is to show the behavior of the frequency as we increase some parameter. '''
 	cD = len(Delta_list)==1
@@ -98,14 +100,36 @@ def exp005( gamma_list: list = list(np.linspace(0.01,0.1,20)),
 		'Delta is fixed '
 		Delta = Delta_list[0]
 		xlab=r"$\gamma $ "
+		param_list=gamma_list
+		def sample_freq(param):
+			return estimate_frequency_L2(Delta=Delta,gamma=param,L=L,c=c,n_modes=n_modes,n_steps=n_steps,opt_method=L2_method)
+
+
 		
 	if cG: 
 		'gamma is fixed'
 		gamma=gamma_list[0]
 		xlab=r"$\Delta$"
+		param_list = Delta_list
+		def sample_freq(param):
+			return estimate_frequency_L2(Delta=param,gamma=gamma,L=L,c=c,n_modes=n_modes,n_steps=n_steps,opt_method=L2_method)
 
-	# TO BE FINISHED !!!
+	data = paralelizar(parameter_list=param_list,f=sample_freq)
 	
-	return 0 
+	fig,ax = plt.subplots()
+
+	ax.plot(param_list,data,'-o',label='estimated frequency')
+	if cD:
+		tau=2*L/c
+		ax.plot(param_list,np.sqrt(np.asarray(param_list)/tau),'k--',alpha=0.5,label=r"$\sqrt{\gamma / \tau} $")
+		ax.legend()
+	ax.set_xlabel(xlab)
+	ax.set_ylabel(r"$\omega $ ")
+	ax.grid()
+
+	fig.tight_layout()
+	plt.show()
+
+	return data
 	
 		
