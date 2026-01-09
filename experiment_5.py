@@ -4,6 +4,7 @@ from numpy.fft import fft, fftfreq,fftshift
 from aux_funs import paralelizar,run_ww_simulation
 from scipy.interpolate import interp1d
 from scipy.optimize import minimize
+from scipy.signal import correlate,find_peaks
 
 
 def fast_ft(x,y):
@@ -19,6 +20,7 @@ def L2_error(x,y,y_ref):
 	
 	return  np.abs(np.trapezoid(y=np.sqrt(dif**2),x=x)/ np.trapezoid(y=np.abs(y),x=x))
 
+# ------------------------------------------------------------------------------------------------------------------------------------------
 
 def estimate_frequency_fft(NT_max:int=30,
 		   n_sample: int = 51,
@@ -57,6 +59,7 @@ def estimate_frequency_fft(NT_max:int=30,
 
 	return 0.5*w_fft
 
+# ------------------------------------------------------------------------------------------------------------------------------------------
 
 def estimate_frequency_L2(gamma:float=0.1,
 						Delta:float = 12,
@@ -79,8 +82,29 @@ def estimate_frequency_L2(gamma:float=0.1,
 	w = minimize(fun=sample_function,x0=np.sqrt(gamma/(2*L/c)),method=opt_method)
 	
 	return w.x
+# ------------------------------------------------------------------------------------------------------------------------------------------
+def estimate_frequency_corr(NT_max:int=30,
+							gamma:float=0.1,
+							Delta:float = 12,
+							L:float=1,
+							c:float=1,
+							n_modes:int=40,
+							n_steps:int=1001):
+	T = 2*np.pi*np.sqrt(2*L/(gamma*c))
+	t_max = NT_max*T 
+	t,e = run_ww_simulation(t_max=t_max,gamma=gamma,Delta=Delta,L=L,c=c,n_steps=n_steps,n_modes=n_modes)
+	corr = correlate(e-np.mean(e),e-np.mean(e))[t.shape[0]-1:] # only using positive time correlations 
+	corr=corr/corr[0]
+	peaks_id,_ = find_peaks(corr)
+	correlation_times= t[peaks_id]
 
-# ----------------------------------------------------------------------------------------------------
+	T,b = np.polyfit(np.arange(1,len(correlation_times)+1),correlation_times,1)
+
+	return np.pi /T
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------
+
 
 
 def exp005( gamma_list: list = list(np.linspace(0.01,0.1,20)),
