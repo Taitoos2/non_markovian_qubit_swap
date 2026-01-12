@@ -1,48 +1,71 @@
-import numpy as np 
-import matplotlib.pyplot as plt 
-from aux_funs import run_ww_simulation,DDE_analytical
-from qnetwork.tools import set_plot_style
+import numpy as np
+import matplotlib.pyplot as plt
+from aux_funs import run_ww_simulation,DDE_analytical,paralelizar
+from scipy.optimize import minimize
 from typing import Optional
 
 
-def exp002( t_max: Optional[float] = None ,
-			gamma_list : list = [0.05,0.1,0.2],
-			Delta_list: list = list(range(1,54,4)),
+def parameter_correction(gamma:float,
+						Delta:float =1,
+						L:float =1,
+						c:float = 1, 
+						n_modes:int = 100,
+						n_steps:int = 401,
+						method_m: str = 'Powell'):
+	''' given Delta and gamma, returns the renormalized set of parameters that best 
+	recover Rabi-like behavior. The criterion is that, in the first period, the minumun value goes closest to 0. '''
+
+	tau=2*L/c
+	T = np.pi/(np.sqrt(gamma/tau))
+
+	def min_estimation(Delta):
+		_,e = run_ww_simulation(t_max=0.75*T,gamma = gamma,Delta=Delta,L=L,c=c,n_modes=n_modes,n_steps=n_steps)  # Important change here 
+	res = minimize(min_estimation,
+				x0=Delta,
+				bounds=[(Delta-0.4,Delta+0.4)],
+				method=method_m,)
+				# options={"xatol": 1e-8,"fatol": 1e-8})
+	
+	t_op,e_op = run_ww_simulation(t_max=4*T,gamma=gamma,Delta=res.x[0],L=L,c=c,n_modes=n_modes,n_steps=n_steps)
+	
+	def dde_correction_estimation(gamma):
+		e_dde = np.abs(DDE_analytical(gamma=gamma,phi=2*np.pi,tau=tau,t=t_op))**2
+		error = np.trapezoid(np.abs(e_op-e_dde),t_op)
+		return np.sum(error)
+	res2 = minimize(dde_correction_estimation,x0=gamma,bounds=[(0.5*gamma,1.5*gamma)],method=method_m)	
+
+	lamb_shift = res.x[0]-Delta
+	gamma_correction = res2.x[0] - gamma 
+	return [lamb_shift,gamma_correction]
+
+
+# -------------------------------------------
+
+def exp002( gamma :float = 0.1,
+			Delta_0: float =1 ,
 			L:float = 1,
 			c: float = 1,
-			n_steps: int = 201,
-			n_modes=100,
+			n_steps: int = 1001,
+			n_modes=150,
 			fancy_bool:bool=True):
-	
-	''' The goal of this experiment is to show that coupling the qubit to higher frequencies of the FSR results in 
-	a protection of the Rabi-like oscillations. 
-	note: I am aware I am computing many times the dde solution, which would not be necessary if the time vector can be fixed beforehand. 
-	I will check this later '''
-	
-	phi = 2*np.pi 
-	tau = 2*L/c
-	if t_max is None:
-		t_max = 25*tau 
-	fig,ax = plt.subplots(figsize=(7,5))
+	''' the point of this experiment is to test wether corrections to the frequency of the qubit can help restablish 
+	Rabi oscillations in the lower energies of the FSR of the cavity. '''
+	tau=2*L/c
+	T = np.pi/(np.sqrt(gamma/tau))
 
-	for gamma in gamma_list:
-		error_list=[]
-		for Delta in Delta_list:
-			phi = 2*np.pi*Delta
-			t,e_ww = run_ww_simulation(t_max=t_max,gamma=gamma,Delta=Delta,L=L,c=c,n_steps=n_steps,n_modes=n_modes)
-			J = DDE_analytical(gamma=gamma,phi=phi,tau=tau,t=t)
-			e_dde = np.abs(J)**2
-			error = np.sqrt(np.trapezoid(y=np.abs(e_ww-e_dde)**2,x=t)) 
-			norm = np.sqrt(np.trapezoid(y=np.abs(e_dde)**2,x=t))
-			error_list.append(error/norm)
-		
-		ax.plot(Delta_list,error_list,'-v',label=rf"$\gamma = {gamma:.2f} $")
+	lamb_shift,gamma_correction = parameter_correction(gamma=gamma,Delta=Delta_0,L=L,c=c,n_modes=n_modes,n_steps=n_steps)
 
-	ax.set_xlabel(r"$\Delta / \omega_{0} $")
-	ax.set_title(r" $L^{2}$ error")
-	ax.legend()
+	t_op,e_op = run_ww_simulation(t_max=3*T,L=L,c=c,n_steps=n_steps,Delta=Delta_0+lamb_shift,gamma=gamma)
+	t,e = run_ww_simulation(t_max=3*T,gamma=gamma,Delta=1,L=L,c=c,n_steps=n_steps)
+
+	print('min. excitation level: '+str(np.min(e_op)))
+	fig,ax = plt.subplots()
+	ax.plot(t,e,label=r"$\Delta = 1.0 $ F.S.R ")
+	ax.plot(t_op,e_op,label=rf"$\Delta = {Delta_0+lamb_shift:.4f}$ F.S.R")
+	ax.set_title(rf"$\gamma = {gamma:.1f} , \tau = 2 $")
 	ax.grid()
+	#plt.xlim(0,5)
+	ax.legend()
 	fig.tight_layout()
+	
 	plt.show()
-
-#exp002(t_max=20)
