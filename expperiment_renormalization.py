@@ -19,8 +19,7 @@ def parameter_correction(gamma:float,
 	T = np.pi/(np.sqrt(gamma/tau))
 
 	def min_estimation(Delta):
-		_,e = run_ww_simulation(t_max=0.75*T,gamma = gamma,Delta=Delta,L=L,c=c,n_modes=n_modes,n_steps=n_steps)  # Important change here  !!  allowing for the second oscillation. decreases precision. 
-		return np.min(e)
+		_,e = run_ww_simulation(t_max=0.75*T,gamma = gamma,Delta=Delta,L=L,c=c,n_modes=n_modes,n_steps=n_steps)  # Important change here 
 	res = minimize(min_estimation,
 				x0=Delta,
 				bounds=[(Delta-0.4,Delta+0.4)],
@@ -42,7 +41,7 @@ def parameter_correction(gamma:float,
 
 # -------------------------------------------
 
-def exp005( gamma :float = 0.1,
+def exp002( gamma :float = 0.1,
 			Delta_0: float =1 ,
 			L:float = 1,
 			c: float = 1,
@@ -71,7 +70,7 @@ def exp005( gamma :float = 0.1,
 	
 	plt.show()
 
-def exp006(Delta_0:Optional[float] = 1,
+def exp003(Delta_0:Optional[float] = 1,
 		   gamma_0: Optional[float] = None,
 		   Delta_list: Optional[list] = None,
 		   gamma_list: Optional[list] = list(np.linspace(0.01,0.5,30)),
@@ -80,7 +79,7 @@ def exp006(Delta_0:Optional[float] = 1,
 		   L: float = 1,
 		   c: float = 1,
 		   scale_log_x: bool=True,
-		   sclae_log_y: bool=True,
+		   scale_log_y: bool=True,
 		   method_m: str = 'Powell'):
 	
 	''' This experiment paralelizes the calculation of the lamb shift and the gamma correction. you can do this 
@@ -128,7 +127,7 @@ def exp006(Delta_0:Optional[float] = 1,
 	if scale_log_x:
 		axs[0].set_xscale('log')
 		axs[1].set_xscale('log')
-	if sclae_log_y:
+	if scale_log_y:
 		axs[0].set_yscale('log')
 		axs[1].set_yscale('log')
 
