@@ -2,247 +2,309 @@ import numpy as np
 from qnetwork.multiphoton_ww import EmittersInWaveguideMultiphotonWW
 from numpy.polynomial import Polynomial
 from typing import Optional
+from joblib import Parallel, delayed
+from scipy.interpolate import interp1d
+from scipy.integrate import RK45
+
 
 def dde_series(gamma, tau, t, eta, alpha=None, _poly_cache={}):
-	import numpy as np
-	from numpy.polynomial import Polynomial
+    import numpy as np
+    from numpy.polynomial import Polynomial
 
-	t = np.asarray(t, float)
-	if t.ndim == 0:
-		t = t.reshape(1)
+    t = np.asarray(t, float)
+    if t.ndim == 0:
+        t = t.reshape(1)
 
-	if alpha is None:
-		alpha = 0.5 * gamma
+    if alpha is None:
+        alpha = 0.5 * gamma
 
-	result = np.zeros_like(t, dtype=complex)
+    result = np.zeros_like(t, dtype=complex)
 
-	N = int(t[-1] // tau)
+    N = int(t[-1] // tau)
 
-	key = (tau, N)
-	if key not in _poly_cache:
-		P = Polynomial([1.0])
-		polys = [(P.copy(), None)]
-		for _ in range(1, N + 1):
-			Q = P.integ()
-			P = P + Q
-			polys.append((P.copy(), Q.copy()))
-		_poly_cache[key] = polys
-	polys = _poly_cache[key]
+    key = (tau, N)
+    if key not in _poly_cache:
+        P = Polynomial([1.0])
+        polys = [(P.copy(), None)]
+        for _ in range(1, N + 1):
+            Q = P.integ()
+            P = P + Q
+            polys.append((P.copy(), Q.copy()))
+        _poly_cache[key] = polys
+    polys = _poly_cache[key]
 
-	# leading term
-	result += np.exp(-alpha * t)
+    # leading term
+    result += np.exp(-alpha * t)
 
-	for n in range(1, N + 1):
-		Pn, Qn = polys[n]
-		tn = t - n * tau
-		mask = tn >= 0
-		if not np.any(mask):
-			continue
+    for n in range(1, N + 1):
+        Pn, Qn = polys[n]
+        tn = t - n * tau
+        mask = tn >= 0
+        if not np.any(mask):
+            continue
 
-		x = -gamma * tn[mask]
+        x = -gamma * tn[mask]
 
-		term = (eta**n) * np.exp(-alpha * t[mask]) * np.exp(alpha * n * tau) * Qn(x)
+        term = (eta**n) * np.exp(-alpha * t[mask]) * np.exp(alpha * n * tau) * Qn(x)
 
-		result[mask] += term
+        result[mask] += term
 
-	return result
+    return result
 
-
-def dde_series_highprecision(gamma, tau, t_list, eta, alpha=None, prec=60):
-	"""
-	High-precision analytical series solution of the DDE:
-
-		dc/dt = -alpha c(t) - gamma sum_{n>=1} eta^n c(t - n*tau) Θ(t-nτ)
-
-	Parameters
-	----------
-	gamma : float
-	tau   : float
-	t_list: array-like
-		Times at which c(t) is evaluated.
-	eta   : complex
-		Phase factor: bright = exp(i phi), dark = -exp(i phi)
-	alpha : complex or None
-		If None, alpha = gamma/2
-	prec  : int
-		Decimal digits precision for mpmath (default 60).
-
-	Returns
-	-------
-	result : list of mp.mpf or mp.mpc
-		Complex amplitudes c(t).
-	"""
-	import mpmath as mp
-	import numpy as np
-
-	# Set precision
-	mp.mp.dps = prec
-
-	# Convert inputs to mpf/mpc
-	t_list = [mp.mpf(t) for t in t_list]
-	gamma = mp.mpf(gamma)
-	tau = mp.mpf(tau)
-	eta = mp.mpc(eta)
-
-	if alpha is None:
-		alpha = gamma / 2
-	else:
-		alpha = mp.mpc(alpha)
-
-	# Leading term: exp(-alpha t)
-	base = [mp.e ** (-alpha * t) for t in t_list]
-	result = base[:]  # deep copy
-
-	# Maximum delay index
-	N = int(mp.floor(t_list[-1] / tau))
-
-	# Polynomial recursion: P_0(x)=1
-	P = [mp.mpf("1")]
-	polys = []  # store Q_n
-
-	for n in range(1, N + 1):
-		# Q_n(x) = ∫ P_{n-1}(x) dx
-		Q = [mp.mpf("0")] + [P[k] / (k + 1) for k in range(len(P))]
-		polys.append(Q)
-
-		# P_n(x) = P_{n-1}(x) + Q_n(x)
-		P = [(P[k] if k < len(P) else mp.mpf("0")) + Q[k] for k in range(len(Q))]
-
-	# ---- Sum the series ----
-	for n in range(1, N + 1):
-		Qn = polys[n - 1]
-
-		for i, t in enumerate(t_list):
-			tn = t - n * tau
-			if tn < 0:
-				continue
-
-			x = -gamma * tn
-
-			# Horner evaluation of Q_n(x)
-			val = mp.mpf("0")
-			for c in reversed(Qn):
-				val = val * x + c
-
-			term = (eta**n) * mp.e ** (-alpha * t) * mp.e ** (alpha * n * tau) * val
-			result[i] += term
-
-	return np.array(result, dtype=complex)
 
 # ---------------------------------------------------------------------
 
-def DDE_analytical(gamma,phi,tau,t):
-	''' returns the analitycal solution for the DDE of a single emitter in a cavity'''
-	
-	alpha = 1j*phi/tau + 0.5*gamma 
-	result =  np.exp(-alpha*t)*np.ones(len(t),dtype=complex)
-	poli = Polynomial([1])
-	N = int(t[-1]/tau)
-	
-	for n in range(1,N+1):
-		dummie = poli.integ() 
-		result += np.exp(-alpha*t)*np.exp(n*alpha*tau)*dummie(-gamma*(t-n*tau))*np.heaviside(t-n*tau,1)
-		poli += dummie 
-	return result 
+
+def DDE_analytical(gamma, phi, tau, t):
+    """returns the analitycal solution for the DDE of a single emitter in a cavity"""
+
+    alpha = 1j * phi / tau + 0.5 * gamma
+    result = np.exp(-alpha * t) * np.ones(len(t), dtype=complex)
+    poli = Polynomial([1])
+    N = int(t[-1] / tau)
+
+    for n in range(1, N + 1):
+        dummie = poli.integ()
+        result += (
+            np.exp(-alpha * t)
+            * np.exp(n * alpha * tau)
+            * dummie(-gamma * (t - n * tau))
+            * np.heaviside(t - n * tau, 1)
+        )
+        poli += dummie
+    return result
+
 
 def DDE_polynomial_series(N):
-	''' returns the polynomial series used in the analytical solution'''
-	poli = Polynomial([1])
-	series=[poli]
-	for n in range(1,N+1):
-		dummie = poli.integ() 
-		series.append(dummie)
-		poli += dummie 
-	return series
-
-def DDE_evaluate_series(gamma,phi,tau,t,series):
-	''' evaluation of the polynomial series in a specific time t '''
-	result = 0.0
-	alpha = 1j*phi/tau + 0.5*gamma 
-	for k,poli in enumerate(series):
-		n=k
-		result+= np.exp(-alpha*t)*np.exp(n*alpha*tau)*poli(-gamma*(t-n*tau))*np.heaviside(t-n*tau,1)
-
-	return result 
+    """returns the polynomial series used in the analytical solution"""
+    poli = Polynomial([1])
+    series = [poli]
+    for n in range(1, N + 1):
+        dummie = poli.integ()
+        series.append(dummie)
+        poli += dummie
+    return series
 
 
-def run_ww_simulation(t_max: Optional[float] = None , gamma :float = 0.1, Delta: float = 10.0 , L:float = 1, c: float = 1, n_steps: int = 201,n_modes=20):
-	''' run the dynamic of A SINGLE QUBIT in a cavity, using the Wigner-Weisskopf integrator'''
-	tau=2*L/c
-	if t_max is None:
-		t_max = 25*tau 
-	setup=EmittersInWaveguideMultiphotonWW(gamma=gamma,Delta=Delta,L=L,c=c,positions=[0.0], n_modes=n_modes, n_excitations=list(range(2)))
-	t,e = setup.evolve(t_max,n_steps=n_steps,initial_state="1")
-	return t,e[:,0]
+def DDE_evaluate_series(gamma, phi, tau, t, series):
+    """evaluation of the polynomial series in a specific time t"""
+    result = 0.0
+    alpha = 1j * phi / tau + 0.5 * gamma
+    for k, poli in enumerate(series):
+        n = k
+        result += (
+            np.exp(-alpha * t)
+            * np.exp(n * alpha * tau)
+            * poli(-gamma * (t - n * tau))
+            * np.heaviside(t - n * tau, 1)
+        )
+
+    return result
+
+
+def run_ww_simulation(
+    t_max: Optional[float] = None,
+    gamma: float = 0.1,
+    Delta: float = 10.0,
+    L: float = 1,
+    c: float = 1,
+    n_steps: int = 201,
+    n_modes=20,
+):
+    """run the dynamic of A SINGLE QUBIT in a cavity, using the Wigner-Weisskopf integrator"""
+    tau = 2 * L / c
+    if t_max is None:
+        t_max = 25 * tau
+    setup = EmittersInWaveguideMultiphotonWW(
+        gamma=gamma,
+        Delta=Delta,
+        L=L,
+        c=c,
+        positions=[0.0],
+        n_modes=n_modes,
+        n_excitations=list(range(2)),
+    )
+    t, e = setup.evolve(t_max, n_steps=n_steps, initial_state="1")
+    return t, e[:, 0]
+
 
 # --------------------------------------------------------------------------------
 
-def two_qubits_analytical(t_max: float = 20,
-						n_steps: int = 201,
-						gamma: float = 0.1,
-						phi: float = 2*np.pi, 
-						tau : float = 2,
-						initial: np.ndarray = np.asarray([0,1,0,0])):
-	 
-	t = np.linspace(0,t_max,n_steps)
-	b = np.asarray([[0,0],[1,0]])
-	b1 = np.kron(b,np.eye(2))
-	b2 = np.kron(np.eye(2),b)
 
-	c_plus = DDE_analytical(gamma=gamma,phi=phi,tau=tau,t=t)
-	c_minus = DDE_analytical(gamma=gamma,phi=phi + np.pi,tau=tau,t=t) * np.exp(1j*np.pi/tau*t)
+def two_qubits_analytical(
+    t_max: float = 20,
+    n_steps: int = 201,
+    gamma: float = 0.1,
+    phi: float = 2 * np.pi,
+    tau: float = 2,
+    initial: np.ndarray = np.asarray([0, 1, 0, 0]),
+):
+    t = np.linspace(0, t_max, n_steps)
+    b = np.asarray([[0, 0], [1, 0]])
+    b1 = np.kron(b, np.eye(2))
+    b2 = np.kron(np.eye(2), b)
 
-	sum = 0.5*(c_plus+c_minus)
-	dif = 0.5*(c_plus-c_minus)
+    c_plus = DDE_analytical(gamma=gamma, phi=phi, tau=tau, t=t)
+    c_minus = DDE_analytical(gamma=gamma, phi=phi + np.pi, tau=tau, t=t) * np.exp(
+        1j * np.pi / tau * t
+    )
 
-	pop1 = (np.abs(sum)**2)*np.dot(initial,b1.T@b1@initial).astype(complex)
-	pop1+= np.conjugate(sum)*dif*np.dot(initial,b1.T@b2@initial)
-	pop1+= np.conjugate(dif)*sum*np.dot(initial,b2.T@b1@initial)
-	pop1+= (np.abs(dif)**2)*np.dot(initial,b2.T@b2@initial)
+    sum = 0.5 * (c_plus + c_minus)
+    dif = 0.5 * (c_plus - c_minus)
 
-	pop2 = (np.abs(dif)**2)*np.dot(initial,b1.T@b1@initial).astype(complex)
-	pop2+= np.conjugate(dif)*sum*np.dot(initial,b1.T@b2@initial)
-	pop2+= np.conjugate(sum)*dif*np.dot(initial,b2.T@b1@initial)
-	pop2+= (np.abs(sum)**2)*np.dot(initial,b2.T@b2@initial)
-	return t,[np.abs(pop1),np.abs(pop2)]
+    pop1 = (np.abs(sum) ** 2) * np.dot(initial, b1.T @ b1 @ initial).astype(complex)
+    pop1 += np.conjugate(sum) * dif * np.dot(initial, b1.T @ b2 @ initial)
+    pop1 += np.conjugate(dif) * sum * np.dot(initial, b2.T @ b1 @ initial)
+    pop1 += (np.abs(dif) ** 2) * np.dot(initial, b2.T @ b2 @ initial)
+
+    pop2 = (np.abs(dif) ** 2) * np.dot(initial, b1.T @ b1 @ initial).astype(complex)
+    pop2 += np.conjugate(dif) * sum * np.dot(initial, b1.T @ b2 @ initial)
+    pop2 += np.conjugate(sum) * dif * np.dot(initial, b2.T @ b1 @ initial)
+    pop2 += (np.abs(sum) ** 2) * np.dot(initial, b2.T @ b2 @ initial)
+    return t, [np.abs(pop1), np.abs(pop2)]
 
 
-def two_qubits_analytical_Hong(t_max: float = 20,
-						  n_steps: int = 201,
-						  gamma: float = 0.1,
-						  phi: float = 2*np.pi, 
-						  L:float =1,
-						  c: float = 1,
-						  initial: np.ndarray = np.asarray([0,1,0,0])):
-	tau = L/c
-	t = np.linspace(0,t_max,n_steps)
-	b = np.asarray([[0,0],[1,0]])
-	b1 = np.kron(b,np.eye(2))
-	b2 = np.kron(np.eye(2),b)
+def two_qubits_analytical_Hong(
+    t_max: float = 20,
+    n_steps: int = 201,
+    gamma: float = 0.1,
+    phi: float = 2 * np.pi,
+    L: float = 1,
+    c: float = 1,
+    initial: np.ndarray = np.asarray([0, 1, 0, 0]),
+):
+    tau = L / c
+    t = np.linspace(0, t_max, n_steps)
+    b = np.asarray([[0, 0], [1, 0]])
+    b1 = np.kron(b, np.eye(2))
+    b2 = np.kron(np.eye(2), b)
 
-	c_plus = dde_series(gamma=gamma,tau=tau,eta=np.exp(1j*phi),t=t)
-	c_minus = dde_series(gamma=gamma,tau=tau,eta=-np.exp(1j*phi),t=t)
+    c_plus = dde_series(gamma=gamma, tau=tau, eta=np.exp(1j * phi), t=t)
+    c_minus = dde_series(gamma=gamma, tau=tau, eta=-np.exp(1j * phi), t=t)
 
-	sum = 0.5*(c_plus+c_minus)
-	dif = 0.5*(c_plus-c_minus)
+    sum = 0.5 * (c_plus + c_minus)
+    dif = 0.5 * (c_plus - c_minus)
 
-	pop1 = (np.abs(sum)**2)*np.dot(initial,b1.T@b1@initial).astype(complex)
-	pop1+= np.conjugate(sum)*dif*np.dot(initial,b1.T@b2@initial)
-	pop1+= np.conjugate(dif)*sum*np.dot(initial,b2.T@b1@initial)
-	pop1+= (np.abs(dif)**2)*np.dot(initial,b2.T@b2@initial)
+    pop1 = (np.abs(sum) ** 2) * np.dot(initial, b1.T @ b1 @ initial).astype(complex)
+    pop1 += np.conjugate(sum) * dif * np.dot(initial, b1.T @ b2 @ initial)
+    pop1 += np.conjugate(dif) * sum * np.dot(initial, b2.T @ b1 @ initial)
+    pop1 += (np.abs(dif) ** 2) * np.dot(initial, b2.T @ b2 @ initial)
 
-	pop2 = (np.abs(dif)**2)*np.dot(initial,b1.T@b1@initial).astype(complex)
-	pop2+= np.conjugate(dif)*sum*np.dot(initial,b1.T@b2@initial)
-	pop2+= np.conjugate(sum)*dif*np.dot(initial,b2.T@b1@initial)
-	pop2+= (np.abs(sum)**2)*np.dot(initial,b2.T@b2@initial)
-	return t,[np.abs(pop1),np.abs(pop2)]
+    pop2 = (np.abs(dif) ** 2) * np.dot(initial, b1.T @ b1 @ initial).astype(complex)
+    pop2 += np.conjugate(dif) * sum * np.dot(initial, b1.T @ b2 @ initial)
+    pop2 += np.conjugate(sum) * dif * np.dot(initial, b2.T @ b1 @ initial)
+    pop2 += (np.abs(sum) ** 2) * np.dot(initial, b2.T @ b2 @ initial)
+    return t, [np.abs(pop1), np.abs(pop2)]
+
 
 ## -------------------------------------
+def paralelizar(parameter_list, f, ncores: int = 10):
+    resultados = Parallel(n_jobs=ncores, backend="loky")(
+        delayed(f)(param) for param in parameter_list
+    )
+    return resultados
 
-from joblib import Parallel, delayed 
 
-def paralelizar(parameter_list,f,ncores: int = 10):
-	resultados = Parallel(n_jobs=ncores, backend='loky')(
-		delayed(f)(param) for param in parameter_list
-	)
-	return resultados
+# -----------------------------------------------------
+def dde_scalar(
+    t_max: float,
+    gamma1,  # float | Callable[[float], float]
+    gamma2,  # float | Callable[[float], float]
+    phi: float = 0.0,
+    tau: float = 1.0,
+    N: int = 2,
+    dt_max: float = 1e-2,
+    buffer_size: int = 100,
+):
+    phase = np.exp(1j * phi)
+    shape = (N,)
+
+    next_index = 1
+    t_list = np.zeros(buffer_size, dtype=float)
+
+    c_list = np.zeros((buffer_size, N), dtype=np.complex128)
+    c_list[0] = np.array([1.0 + 0.0j, 0.0 + 0.0j])
+
+    # a_out_list: (time, 2 directions, N emitters)
+    a_out_list = np.zeros((buffer_size, 2, N), dtype=np.complex128)
+
+    right = list(range(1, N)) + [0]
+    left = [N - 1] + list(range(N - 1))
+
+    zero_current = np.zeros((2, N), dtype=np.complex128)
+
+    def zero_current_interpolator(t: np.floating) -> np.ndarray:
+        return zero_current
+
+    interpolator = zero_current_interpolator
+
+    def gamma_of_t(t: float) -> np.ndarray:
+        g1 = gamma1(t) if callable(gamma1) else gamma1
+        g2 = gamma2(t) if callable(gamma2) else gamma2
+        return np.array([g1, g2], dtype=float)
+
+    def derivative(t, y):
+        c = y.reshape(shape)  # (N,)
+        a_out_past = interpolator(t - tau)  # (2, N)
+
+        a_in = phase * a_out_past[0, right] + phase * a_out_past[1, left]  # (N,)
+
+        gamma = gamma_of_t(float(t))
+        gamma_half = 0.5 * gamma
+
+        # NOTE: gamma must be >= 0 for sqrt; ensure your gamma(t) respects this.
+        dcdt = -gamma_half * c - 1j * np.sqrt(gamma_half) * a_in
+        return dcdt.reshape(-1)
+
+    def add_solution(t: float | np.floating, c: np.ndarray):
+        nonlocal next_index, buffer_size, t_list, c_list, a_out_list, interpolator
+        i = next_index
+        L = buffer_size
+
+        if i >= L:
+            buffer_size = L = int(L * 1.5)
+            t_list = np.resize(t_list, L)
+            c_list = np.resize(c_list, (L, N))
+            a_out_list = np.resize(a_out_list, (L, 2, N))
+
+        t_list[i] = float(t)
+        c_list[i] = c
+
+        a_out_past = interpolator(np.float64(t - tau))  # (2, N)
+
+        gamma_now = gamma_of_t(float(t))
+        emitted = (-1j * np.sqrt(0.5 * gamma_now)) * c  # (N,)
+
+        a_out_list[i, 0, :] = phase * a_out_past[0, right] + emitted
+        a_out_list[i, 1, :] = phase * a_out_past[1, left] + emitted
+
+        next_index = i + 1
+
+    add_solution(np.float64(0), c_list[0])
+
+    integrator = RK45(
+        derivative,
+        t_list[0],
+        c_list[0].reshape(-1),
+        t_bound=float(t_max),
+        max_step=float(dt_max) * float(tau),
+        vectorized=False,
+    )
+
+    while integrator.t < t_max:
+        if integrator.t > tau:
+            interpolator = interp1d(
+                t_list[:next_index],
+                a_out_list[:next_index],
+                assume_sorted=True,
+                axis=0,
+                copy=False,
+            )
+        integrator.step()
+        add_solution(integrator.t, integrator.y.reshape(shape))
+
+    i = next_index
+    t_list = t_list[:i]
+    c_list = c_list[:i]
+
+    return t_list, c_list
