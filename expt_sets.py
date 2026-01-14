@@ -216,6 +216,9 @@ def expt_001_dynamics(
     plt.show()
 
 
+# ------------------------------------------------------------------------------------
+
+
 def expt_002_perturbation_convergence(
     Delta=0.5 * np.pi,
     gamma=0.01,
@@ -277,6 +280,9 @@ def expt_002_perturbation_convergence(
     plt.show()
 
 
+# ------------------------------------------------------------------------------------
+
+
 def dde_series_function(gamma, tau, eta, N, alpha=None):
     if alpha is None:
         alpha = 0.5 * gamma
@@ -291,8 +297,7 @@ def dde_series_function(gamma, tau, eta, N, alpha=None):
     def evaluate(t):
         t = np.asarray(t, dtype=float)
         # leading term
-        result = np.exp(-alpha * t).astype(complex)
-
+        result = np.exp(-alpha * t).astype(np.complex128)
         for n, Q in polys:
             tn = t - n * tau
             term = (
@@ -309,8 +314,35 @@ def dde_series_function(gamma, tau, eta, N, alpha=None):
     return evaluate
 
 
+# binary peak search
+def binary_peak_search(p2, Tmin, Tmax, n_scan=1000, tol=1e-9):
+    # coarse scan
+    ts = np.linspace(Tmin, Tmax, n_scan)
+    vals = np.array([p2(t) for t in ts])
+    idx = np.argmax(vals)
+
+    # find a local interval
+    if idx == 0:
+        tL, tR = ts[0], ts[1]
+    elif idx == n_scan - 1:
+        tL, tR = ts[-2], ts[-1]
+    else:
+        tL, tR = ts[idx - 1], ts[idx + 1]
+
+    # binary search inside [tL, tR]
+    while (tR - tL) > tol:
+        m1 = tL + (tR - tL) / 3
+        m2 = tR - (tR - tL) / 3
+        if p2(m1) < p2(m2):
+            tL = m1
+        else:
+            tR = m2
+    t_peak = 0.5 * (tL + tR)
+    return t_peak, p2(t_peak)
+
+
 def compute_period_and_fidelity(
-    Delta, gamma, tau=1, T_min=0.5, T_max=1.9, optim_method="binary"
+    Delta, gamma, tau=1, T_min=0.8, T_max=1.2, optim_method="binary"
 ):
     # phase
     FSR = np.pi / tau
@@ -324,32 +356,6 @@ def compute_period_and_fidelity(
         cb = dde_series_function(gamma, tau, eta_b, int(T_max / tau))
         cd = dde_series_function(gamma, tau, eta_d, int(T_max / tau))
         return lambda t: np.abs(0.5 * (cb(t) - cd(t))) ** 2
-
-    # very stable binary peak search
-    def binary_peak_search(p2, Tmin, Tmax, n_scan=200, tol=1e-6):
-        # coarse scan
-        ts = np.linspace(Tmin, Tmax, n_scan)
-        vals = np.array([p2(t) for t in ts])
-        idx = np.argmax(vals)
-
-        # find a local interval
-        if idx == 0:
-            tL, tR = ts[0], ts[1]
-        elif idx == n_scan - 1:
-            tL, tR = ts[-2], ts[-1]
-        else:
-            tL, tR = ts[idx - 1], ts[idx + 1]
-
-        # binary search inside [tL, tR]
-        while (tR - tL) > tol:
-            m1 = tL + (tR - tL) / 3
-            m2 = tR - (tR - tL) / 3
-            if p2(m1) < p2(m2):
-                tL = m1
-            else:
-                tR = m2
-        t_peak = 0.5 * (tL + tR)
-        return t_peak, p2(t_peak)
 
     g = np.sqrt(gamma / (2 * tau))
 
@@ -387,7 +393,7 @@ def compute_period_and_fidelity(
 
 
 def expt_003_swapspeed(
-    Delta, gamma_list, tau=1, T_min=0.5, T_max=1.9, opti_method="binary", n_jobs=8
+    Delta, gamma_list, tau=1, T_min=0.8, T_max=1.2, opti_method="binary", n_jobs=8
 ):
     # parallel scan
     results = Parallel(n_jobs=n_jobs)(
@@ -429,6 +435,9 @@ def expt_003_swapspeed(
     plt.show()
 
     return t_list, F_list
+
+
+# ------------------------------------------------------------------------------------
 
 
 def expt_004_opti_compare(Delta, gamma_list, tau=1):
@@ -481,6 +490,7 @@ def expt_004_opti_compare(Delta, gamma_list, tau=1):
     plt.show()
 
 
+# ------------------------------------------------------------------------------------
 def expt_005_compare_peaks(
     Delta=0.0,
     gamma_list=None,
@@ -563,7 +573,10 @@ def expt_005_compare_peaks(
     plt.show()
 
 
-def expt_006_test(T=100.0, gamma=0.1, tau=1.0, dt_max=0.01, phi=0.0):
+# ------------------------------------------------------------------------------------
+
+
+def expt_006_stirap(T=100.0, gamma=0.1, tau=1.0, dt_max=0.01, phi=0.0):
     # DDE
     phi = phi
     setup_dde = EmittersInWaveguideDDE(
@@ -598,3 +611,41 @@ def expt_006_test(T=100.0, gamma=0.1, tau=1.0, dt_max=0.01, phi=0.0):
     plt.legend()
     plt.show()
     return np.abs(clist[-1, 1]) ** 2
+
+
+# ------------------------------------------------------------------------------------
+def expt_008_stirap_T_scan(gamma_list, T_list, phi=0.0, tau=1.0, dt_max=0.01):
+    from aux_funs import dde_scalar
+
+    gamma_list = np.asarray(gamma_list, dtype=float)
+    T_list = np.asarray(T_list, dtype=float)
+    infidelity = np.zeros((len(gamma_list), len(T_list)), dtype=float)
+
+    for ig, gamma in enumerate(gamma_list):
+        for iT, T in enumerate(T_list):
+            g1 = lambda t: np.sin((np.pi * t) / (2 * T * tau)) ** 2 * gamma
+            g2 = lambda t: np.cos((np.pi * t) / (2 * T * tau)) ** 2 * gamma
+
+            _, clist = dde_scalar(
+                t_max=T * tau,
+                gamma1=g1,
+                gamma2=g2,
+                phi=phi,
+                tau=tau,
+                dt_max=dt_max,
+            )
+
+            F = np.abs(clist[-1, 1]) ** 2
+            infidelity[ig, iT] = max(0.0, 1.0 - F)  # 防止数值误差导致负数
+
+    # plot
+    for ig, gamma in enumerate(gamma_list):
+        plt.plot(T_list, infidelity[ig], label=rf"$\gamma={gamma:g}$")
+
+    plt.xlabel("T")
+    plt.ylabel("1 - F (infidelity)")
+    plt.xscale("log")
+    plt.yscale("log")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
