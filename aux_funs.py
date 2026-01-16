@@ -354,4 +354,4 @@ def average_fft(x, y, Ms):
 
 	A_avg = np.mean(spectra_interp, axis=0)
 	return omega_common, A_avg
-=======
+
