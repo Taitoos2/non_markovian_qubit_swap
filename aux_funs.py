@@ -302,8 +302,55 @@ def dde_scalar(
         integrator.step()
         add_solution(integrator.t, integrator.y.reshape(shape))
 
+
     i = next_index
     t_list = t_list[:i]
     c_list = c_list[:i]
 
     return t_list, c_list
+
+
+from joblib import Parallel, delayed 
+from numpy.fft import fft, fftshift
+from scipy.interpolate import interp1d
+
+def paralelizar(parameter_list,f,ncores: int = -1):
+	resultados = Parallel(n_jobs=ncores, backend='loky')(
+		delayed(f)(param) for param in parameter_list
+	)
+	return resultados
+
+
+def fast_f_t(x : np.ndarray,y:np.ndarray, M:int = 500):
+		t_interp = np.linspace(0, x[-1], M)  
+		dt = t_interp[1] - t_interp[0]
+		y = np.interp(t_interp,x, y )
+		y -= np.mean(y)
+		k = np.fft.fftfreq(M, d=dt)
+		yw = np.fft.fft(y)
+		return 2*np.pi*fftshift(k), fftshift(yw)*dt
+
+
+def average_fft(x, y, Ms):
+	spectra = []
+	freqs_list = []
+
+	for M in Ms:
+		omega, A = fast_f_t(x, y, M)
+		freqs_list.append(omega)
+		spectra.append(A)
+
+	omega_min = max(freqs[0] for freqs in freqs_list)     # límite inferior común
+	omega_max = min(freqs[-1] for freqs in freqs_list)    # límite superior común
+	N_common = max(len(f) for f in freqs_list)            # densidad similar a la mayor
+	omega_common = np.linspace(omega_min, omega_max, N_common)
+
+
+	spectra_interp = []
+	for omega, A in zip(freqs_list, spectra):
+		f_interp = interp1d(omega, A, kind='linear', bounds_error=False, fill_value=0.0)
+		spectra_interp.append(f_interp(omega_common))
+
+	A_avg = np.mean(spectra_interp, axis=0)
+	return omega_common, A_avg
+
