@@ -7,6 +7,8 @@ from numpy.polynomial import Polynomial
 from qnetwork.dde import EmittersInWaveguideDDE
 from qnetwork.ww import EmittersInWaveguideWW
 from qnetwork.multiphoton_ww import EmittersInWaveguideMultiphotonWW, Waveguide
+from scipy.linalg import expm
+from aux_funs import dde_scalar
 
 
 def expt_001_dynamics(
@@ -591,10 +593,19 @@ def expt_006_stirap(T=100.0, gamma=0.1, tau=1.0, dt_max=0.01, phi=0.0):
     initial = "10"
     t_DDE, pop_DDE = setup_dde.n_photons(initial)
     # dde scalar
-    from aux_funs import dde_scalar
 
-    g1 = lambda t: np.sin((np.pi * t) / (2 * T * tau)) ** 2 * gamma
-    g2 = lambda t: np.cos((np.pi * t) / (2 * T * tau)) ** 2 * gamma
+    # g1 = lambda t: np.sin((np.pi * t) / (2 * T * tau)) ** 2 * gamma
+    # g2 = lambda t: np.cos((np.pi * t) / (2 * T * tau)) ** 2 * gamma
+    g1 = lambda t: (
+        gamma * np.sin(np.pi * (t) / (2 * (T - 1) * tau)) ** 2
+        if t <= (T - 1) * tau
+        else gamma
+    )
+    g2 = lambda t: (
+        gamma * np.cos(np.pi * (t - tau) / (2 * (T - 1) * tau)) ** 2
+        if t >= tau
+        else gamma
+    )
     tlist, clist = dde_scalar(
         t_max=T * tau, gamma1=g1, gamma2=g2, phi=phi, tau=tau, dt_max=dt_max
     )
@@ -614,38 +625,150 @@ def expt_006_stirap(T=100.0, gamma=0.1, tau=1.0, dt_max=0.01, phi=0.0):
 
 
 # ------------------------------------------------------------------------------------
-def expt_008_stirap_T_scan(gamma_list, T_list, phi=0.0, tau=1.0, dt_max=0.01):
-    from aux_funs import dde_scalar
+def stirap_3level(T=20.0, dt=0.01, tau=1.0, gamma=0.1):
+    psi = np.array([1.0, 0.0, 0.0], dtype=np.complex128)
 
-    gamma_list = np.asarray(gamma_list, dtype=float)
-    T_list = np.asarray(T_list, dtype=float)
-    infidelity = np.zeros((len(gamma_list), len(T_list)), dtype=float)
+    n_steps = int(np.ceil(T / dt))
+    t = np.linspace(0.0, T, n_steps + 1)
+    pop = np.empty((n_steps + 1, 3), dtype=float)
 
+    for i in range(n_steps + 1):
+        pop[i] = np.abs(psi) ** 2
+        if i == n_steps:
+            break
+
+        x = (np.pi / (2.0 * (T) * tau)) * t[i]
+        Ωp = np.sqrt(gamma / (2.0 * tau)) * np.sin(x)
+        Ωs = np.sqrt(gamma / (2.0 * tau)) * np.cos(x)
+
+        H = np.array([[0, Ωp, 0], [Ωp, 0, Ωs], [0, Ωs, 0]], dtype=np.complex128)
+        psi = expm((-1j * dt) * H) @ psi  # U(t) psi
+
+    return t, pop
+
+
+def expt_008_stirap_T_scan(
+    gamma_list,
+    T_list,
+    phi=0.0,
+    tau=1.0,
+    dt_max=0.01,
+    n_jobs=-1,
+):
+    gamma_list = np.asarray(gamma_list, float)
+    T_list = np.asarray(T_list, float)
+
+    ng, nT = len(gamma_list), len(T_list)
+    inf = np.zeros((ng, nT))
+    inf_delay = np.zeros((ng, nT))
+    inf_cav = np.zeros((ng, nT))
+
+    # pulses
+    def gamma_pulse(gamma, T):
+        den = 2.0 * (T - 1.0) * tau
+        return (
+            lambda t: gamma * np.sin(np.pi * t / den) ** 2,
+            lambda t: gamma * np.cos(np.pi * t / den) ** 2,
+        )
+
+    def gamma_pulse_delay(gamma, T):
+        den = 2.0 * (T - 1.0) * tau
+        return (
+            (
+                lambda t: gamma * np.sin(np.pi * t / den) ** 2
+                if t <= (T - 1.0) * tau
+                else gamma
+            ),
+            (
+                lambda t: gamma * np.cos(np.pi * (t - tau) / den) ** 2
+                if t >= tau
+                else gamma
+            ),
+        )
+
+    # ---- one (gamma, T) job ----
+    def _solve_one_T(gamma: float, T: float):
+        gamma1, gamma2 = gamma_pulse(gamma, T)
+        gamma1d, gamma2d = gamma_pulse_delay(gamma, T)
+
+        _, c = dde_scalar(
+            t_max=(T - 1.0) * tau,
+            gamma1=gamma1,
+            gamma2=gamma2,
+            phi=phi,
+            tau=tau,
+            dt_max=dt_max,
+        )
+        _, cd = dde_scalar(
+            t_max=T * tau,
+            gamma1=gamma1d,
+            gamma2=gamma2d,
+            phi=phi,
+            tau=tau,
+            dt_max=dt_max,
+        )
+
+        _, pop_cav = stirap_3level(T=(T - 1.0) * tau, dt=dt_max, tau=tau, gamma=gamma)
+
+        F = np.abs(c[-1, 1]) ** 2
+        Fd = np.abs(cd[-1, 1]) ** 2
+        Fc = pop_cav[-1, 2]
+
+        return 1.0 - F, 1.0 - Fd, 1.0 - Fc
+
+    # compute (parallel over T for each gamma)
     for ig, gamma in enumerate(gamma_list):
-        for iT, T in enumerate(T_list):
-            g1 = lambda t: np.sin((np.pi * t) / (2 * T * tau)) ** 2 * gamma
-            g2 = lambda t: np.cos((np.pi * t) / (2 * T * tau)) ** 2 * gamma
+        results = Parallel(n_jobs=n_jobs, backend="loky", prefer="processes")(
+            delayed(_solve_one_T)(float(gamma), float(T)) for T in T_list
+        )
+        # unzip
+        inf[ig, :] = [r[0] for r in results]
+        inf_delay[ig, :] = [r[1] for r in results]
+        inf_cav[ig, :] = [r[2] for r in results]
 
-            _, clist = dde_scalar(
-                t_max=T * tau,
-                gamma1=g1,
-                gamma2=g2,
-                phi=phi,
-                tau=tau,
-                dt_max=dt_max,
-            )
+    # ----- plot pulses (first gamma, first T) -----
+    gamma0, T0 = float(gamma_list[0]), float(T_list[0])
+    gamma1, gamma2 = gamma_pulse(gamma0, T0)
+    gamma1d, gamma2d = gamma_pulse_delay(gamma0, T0)
 
-            F = np.abs(clist[-1, 1]) ** 2
-            infidelity[ig, iT] = max(0.0, 1.0 - F)  # 防止数值误差导致负数
+    tg = np.linspace(0.0, T0 * tau, 800)
+    gamma1v = np.array([gamma1(x) for x in tg])
+    gamma2v = np.array([gamma2(x) for x in tg])
+    gamma1dv = np.array([gamma1d(x) for x in tg])
+    gamma2dv = np.array([gamma2d(x) for x in tg])
 
-    # plot
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(12, 4))
+
+    axL.plot(tg / tau, np.sqrt(gamma1v / (2.0 * tau)) / np.pi, label=r"$g_1$")
+    axL.plot(tg / tau, np.sqrt(gamma2v / (2.0 * tau)) / np.pi, label=r"$g_2$")
+    axL.plot(
+        tg / tau, np.sqrt(gamma1dv / (2.0 * tau)) / np.pi, "--", label=r"$g_1$ (delay)"
+    )
+    axL.plot(
+        tg / tau, np.sqrt(gamma2dv / (2.0 * tau)) / np.pi, "--", label=r"$g_2$ (delay)"
+    )
+
+    # x-axis is t/tau so verticals should be 1 and (T0-1)
+    axL.axvline(1.0, color="black", linestyle="--", label=r"$\tau$")
+    axL.axvline(T0 - 1.0, color="gray", linestyle="--", label=r"$T-\tau$")
+
+    axL.set_xlabel(r"$t/\tau$")
+    axL.set_ylabel(r"$g(t)$")
+    axL.set_title(f"pulses (g_max/FSR={np.sqrt(gamma0 / 2) / np.pi:g}, T={T0:g}τ)")
+    axL.legend()
+
+    # avoid mathtext pitfalls in legend by using plain text labels
     for ig, gamma in enumerate(gamma_list):
-        plt.plot(T_list, infidelity[ig], label=rf"$\gamma={gamma:g}$")
+        gm = np.sqrt(gamma / (2 * np.pi**2))
+        axR.plot(T_list, inf[ig], label=f"g_max/FSR={gm:g}")
+        axR.plot(T_list, inf_delay[ig], "--", label=f"g_max/FSR={gm:g} (delay)")
+        axR.plot(T_list, inf_cav[ig], ":", label=f"g_max/FSR={gm:g} (cavity)")
 
-    plt.xlabel("T")
-    plt.ylabel("1 - F (infidelity)")
-    plt.xscale("log")
-    plt.yscale("log")
-    plt.legend()
-    plt.tight_layout()
+    axR.set_xlabel("T/tau")
+    axR.set_ylabel("1 - F")
+    axR.set_xscale("log")
+    axR.set_yscale("log")
+    axR.legend()
+
+    fig.tight_layout()
     plt.show()

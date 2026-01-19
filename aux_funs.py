@@ -214,7 +214,7 @@ def dde_scalar(
     tau: float = 1.0,
     N: int = 2,
     dt_max: float = 1e-2,
-    buffer_size: int = 100,
+    buffer_size: int = 1000,
 ):
     phase = np.exp(1j * phi)
     shape = (N,)
@@ -252,7 +252,6 @@ def dde_scalar(
         gamma = gamma_of_t(float(t))
         gamma_half = 0.5 * gamma
 
-        # NOTE: gamma must be >= 0 for sqrt; ensure your gamma(t) respects this.
         dcdt = -gamma_half * c - 1j * np.sqrt(gamma_half) * a_in
         return dcdt.reshape(-1)
 
