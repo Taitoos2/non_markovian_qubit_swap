@@ -314,7 +314,7 @@ from joblib import Parallel, delayed
 from numpy.fft import fft, fftshift
 from scipy.interpolate import interp1d
 
-def paralelizar(parameter_list,f,ncores: int = -1):
+def paralelizar(parameter_list,f,ncores: int = 12):
 	resultados = Parallel(n_jobs=ncores, backend='loky')(
 		delayed(f)(param) for param in parameter_list
 	)

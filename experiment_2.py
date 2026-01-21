@@ -20,6 +20,7 @@ def parameter_correction(gamma:float,
 
 	def min_estimation(Delta):
 		_,e = run_ww_simulation(t_max=0.75*T,gamma = gamma,Delta=Delta,L=L,c=c,n_modes=n_modes,n_steps=n_steps)  # Important change here 
+		return np.min(e)
 	res = minimize(min_estimation,
 				x0=Delta,
 				bounds=[(Delta-0.4,Delta+0.4)],
