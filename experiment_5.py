@@ -6,8 +6,8 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from matplotlib.ticker import FuncFormatter
 
 from scipy.interpolate import interp1d
-
 from aux_funs import average_fft,DDE_analytical,paralelizar
+plt.rcParams['mathtext.fontset'] = 'cm'
 
 def exp005(gamma:float=0.1,
 		   tau: float = 1,
@@ -56,7 +56,7 @@ def exp005(gamma:float=0.1,
 	
 	w_res,I_res = sample_phi(0)
 
-	fig,ax =plt.subplots(figsize=(7, 4))
+	fig,ax =plt.subplots(figsize=(8, 4))
 
 	im = ax.imshow(
 		u_map.T,
@@ -89,5 +89,10 @@ def exp005(gamma:float=0.1,
 	axins.set_xlim(-2.5,2.5)
 	axins.set_xlabel(r"$\nu \tau / \pi $")
 
-	
+	fig.savefig('figure2_2.pdf')
 	plt.show()
+
+
+from qnetwork.tools import set_plot_style
+set_plot_style()
+exp005(gamma=0.2,phi_range =list(np.linspace(-3*np.pi,3*np.pi,600)))

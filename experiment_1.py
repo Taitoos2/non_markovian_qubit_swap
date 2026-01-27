@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 from aux_funs import run_ww_simulation,DDE_analytical
 from typing import Optional
 
+plt.rcParams['mathtext.fontset'] = 'cm'
+
 
 CB_color_cycle = ['darkblue','cornflowerblue','lightskyblue']
 linestyle_cycle=['dotted','dashdot','dashed']
@@ -46,7 +48,11 @@ def exp001(gamma :float = 0.1,
 	
 	axs.legend()
 	#fig.tight_layout()
+	fig.savefig('figure1.pdf')
 	axs.set_xlabel(r"$t/\tau$")
 	plt.show()
-	
-#exp001(gamma=0.5,Delta_list=[1,5,100],n_points=201)
+
+
+from qnetwork.tools import set_plot_style
+set_plot_style()
+exp001(gamma=0.5,Delta_list=[1,5,100],n_points=201)
