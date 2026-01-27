@@ -30,7 +30,7 @@ def exp001(gamma :float = 0.1,
 
 	t = np.linspace(0,t_max,n_steps)
 	e_dde = np.abs(DDE_analytical(gamma=gamma,phi=0,tau=tau,t=t))**2
-	fig,axs = plt.subplots(figsize=(8,4))
+	fig,axs = plt.subplots(figsize=(8,5))
 	axs.set_xlabel(r"$t/\tau$")
 	
 

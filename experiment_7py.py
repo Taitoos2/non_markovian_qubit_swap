@@ -7,6 +7,7 @@ from functools import partial
 plt.rcParams['mathtext.fontset'] = 'cm'
 
 marker_cycle=['o','v','*','p']
+color_cycle= ['crimson','darkorange','forestgreen','indigo',]
 def L2_error(x,y1,y2):
 	dif = y1-y2
 	return trapezoid(y=np.sqrt(dif**2),x=x) / trapezoid(y=np.sqrt(y2**2),x=x)
@@ -45,7 +46,7 @@ def param_correction(   gamma:float=0.1,
 	return [lamb_shift,gamma_correction]
 
 
-def exp007(gamma_list : list = list(np.linspace(0.05,0.2,12)),
+def exp007(gamma_list : list = list(np.linspace(0.05,0.2,20)),
 			 Delta_list: list= [1,2,3,4],
 			 L:float = 1,
 			 c:float =1,
@@ -59,8 +60,8 @@ def exp007(gamma_list : list = list(np.linspace(0.05,0.2,12)),
 	tau = 2*L/c
 	t_max = 5*tau
 	t = np.linspace(0,t_max,n_steps)
-	fig,axs = plt.subplots(figsize=(8,4))
-	axs.set_xlabel(r"$\gamma / FSR$")
+	fig,axs = plt.subplots(figsize=(8,5))
+
 	data=[]
 
 	def sample_gamma(gamma,Delta):
@@ -76,7 +77,8 @@ def exp007(gamma_list : list = list(np.linspace(0.05,0.2,12)),
 		fun = partial(sample_gamma,Delta=Delta)
 		error = paralelizar(parameter_list=gamma_list,f=fun)
 		data.append(error)
-		axs.plot(np.asarray(gamma_list)/np.pi,error,marker=marker_cycle[i],label=rf"$\omega_e ={Delta:.0f} \omega_0 $")
+		axs.plot(np.asarray(gamma_list)/np.pi,error,marker=marker_cycle[i],color=color_cycle[i],label=rf"$\omega_e ={Delta:.0f} \omega_0 $")
+	axs.set_xlabel(r"$\gamma / \omega_{0}$")
 	axs.legend()
 	plt.show()
 	fig.savefig('figure3.pdf')
