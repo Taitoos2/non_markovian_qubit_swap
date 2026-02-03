@@ -142,14 +142,13 @@ def exp004( gamma_list: list = list(np.linspace(0.01,0.1,20)),
 	
 	fig,ax = plt.subplots()
 
-	ax.plot(param_list,data,'-o',label='estimated frequency')
+	ax.plot(param_list,2*np.asarray(data),color='darkblue',label='frequency splitting')
 	if cD:
 		tau=2*L/c
-		ax.plot(param_list,np.sqrt(np.asarray(param_list)/tau),'k--',alpha=0.5,label=r"$\sqrt{\gamma / \tau} $")
+		ax.plot(param_list,2*np.sqrt(np.asarray(param_list)/tau),linestyle='dashdot',color='orange',label=r"$2\sqrt{\gamma / \tau} $")
 		ax.legend()
 	ax.set_xlabel(xlab)
-	ax.set_ylabel(r"$\omega $ ")
-	ax.grid()
+	ax.set_ylabel(r"$ \nu \tau $ ")
 
 	fig.tight_layout()
 	plt.show()

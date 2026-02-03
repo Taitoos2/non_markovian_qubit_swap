@@ -31,7 +31,7 @@ def exp000(t_max: Optional[float] = None ,
 
 
 
-	fig,axs = plt.subplots(2,1,figsize=(7,5),constrained_layout=True)
+	fig,axs = plt.subplots(2,1,figsize=(7,5),constrained_layout=True, gridspec_kw={"height_ratios": [5, 4]})
 
 	axs[0].plot(t/tau,np.exp(-gamma*t),'k-.',label=r"$ e^{-\gamma t} $",alpha=0.35)
 	axs[0].plot(t/tau,e_dde,'k',label='DDE')

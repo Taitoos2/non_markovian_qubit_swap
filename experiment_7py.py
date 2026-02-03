@@ -63,6 +63,8 @@ def exp007(gamma_list : list = list(np.linspace(0.05,0.2,20)),
 	fig,axs = plt.subplots(figsize=(8,5))
 
 	data=[]
+	lamb_correction =[]
+	gamma_correction = []
 
 	def sample_gamma(gamma,Delta):
 		e_ref = np.abs(DDE_analytical(gamma=gamma,phi=0,tau=2*L/c,t=t))**2	
@@ -71,17 +73,17 @@ def exp007(gamma_list : list = list(np.linspace(0.05,0.2,20)),
 		gamma_r =gamma+gls
 		_,e_ren = run_ww_simulation(t_max=t_max,gamma=gamma_r,Delta=Delta_r,L=L,c=c,n_steps=n_steps,n_modes=n_modes)
 		error_est = L2_error(x=t,y1=e_ren,y2=e_ref)
-		return error_est
+		return [np.abs(dls),np.abs(gls),error_est]
 
 	for i,Delta in enumerate(Delta_list):
 		fun = partial(sample_gamma,Delta=Delta)
-		error = paralelizar(parameter_list=gamma_list,f=fun)
+		dls,gls,error = paralelizar(parameter_list=gamma_list,f=fun)
 		data.append(error)
 		axs.plot(np.asarray(gamma_list)/np.pi,error,marker=marker_cycle[i],color=color_cycle[i],label=rf"$\omega_e ={Delta:.0f} \omega_0 $")
 	axs.set_xlabel(r"$\gamma / \omega_{0}$")
 	axs.legend()
 	plt.show()
-	fig.savefig('figure3.pdf')
+	fig.savefig('figure5.pdf')
 
 	return data 
 	
