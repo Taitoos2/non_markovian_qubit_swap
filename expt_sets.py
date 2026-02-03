@@ -730,6 +730,9 @@ def plot_IF_vs_T(
 
     # STIRAP
     ax.plot(Td, 1 - Fd, "--", label="STIRAP (delay)")
+    # dark state condition
+    ax.plot(T_swap, np.exp(-0.2 * T_swap))
+    ax.plot(T_swap, np.exp(-0.5 * T_swap))
 
     # WW scatter
     for i, D in enumerate(D_ww):
@@ -745,7 +748,333 @@ def plot_IF_vs_T(
     ax.set_yscale("log")
     ax.set_xlabel(r"$T/\tau$")
     ax.set_ylabel(r"$1 - F$")
+    ax.set_xlim([1, None])
     ax.grid(True)
     ax.legend()
     fig.tight_layout()
     plt.show()
+
+
+def QST_CZMK(gamma, T, tau, dt_max=0.01, phi=0.0, WW_sim=True, plot=True):
+    """
+    Smooth CZMK-like emission/absorption pulses for 2-node QST under DDE.
+
+    gamma: overall coupling scale
+    T    : dimensionless total time in units of tau (t_max = T*tau)
+    tau  : delay time
+    """
+
+    t_max = T * tau
+
+    # pulses (kept as your latest form)
+    gamma1 = lambda t: 0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (t - 0.5 * t_max)))
+    gamma2 = (
+        lambda t: 0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (0.5 * t_max - t + tau)))
+    )
+
+    # --- DDE evolve ---
+    t_list, c_dde = dde_scalar(
+        t_max=t_max,
+        gamma1=gamma1,
+        gamma2=gamma2,
+        phi=phi,
+        tau=tau,
+        dt_max=dt_max,
+    )
+
+    # populations (DDE)
+    p1_dde = np.abs(c_dde[:, 0]) ** 2
+    p2_dde = np.abs(c_dde[:, 1]) ** 2
+    # sample pulses on the same grid
+    g1 = np.array([gamma1(t) for t in t_list], dtype=float)
+    g2 = np.array([gamma2(t) for t in t_list], dtype=float)
+    if WW_sim:
+        # --- WW evolve ---
+        c_light = 1.0
+        setup_kind = WG.Cable
+        L = tau * c_light
+        positions = [0.0, L]
+
+        def g_time_mod(t):
+            g1 = np.sqrt(
+                (0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (t - 0.5 * t_max))))
+                / (2 * tau)
+            )
+            g2 = np.sqrt(
+                (0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (0.5 * t_max - t + tau))))
+                / (2 * tau)
+            )
+            return np.array(
+                [[g1 / np.sqrt(gamma / (2 * tau))], [g2 / np.sqrt(gamma / (2 * tau))]],
+                dtype=float,
+            )
+
+        ww = WW(
+            Delta=100,
+            positions=positions,
+            gamma=gamma,
+            n_modes=201,
+            L=L,
+            setup=setup_kind,
+            g_time_modulation=g_time_mod,
+        )
+        t_WW, pop_WW = ww.evolve(t_max, n_steps=1001)
+    if plot:
+        # --- 1×2 layout: left pulses, right populations ---
+        fig, ax = plt.subplots(1, 2, figsize=(10, 3.6))
+
+        # left: pulses
+        ax[0].plot(t_list, g1, label=r"$\gamma_1(t)$")
+        ax[0].plot(t_list, g2, label=r"$\gamma_2(t)$")
+        ax[0].set_xlabel("t")
+        ax[0].set_ylabel(r"$\gamma(t)$")
+        ax[0].legend()
+        ax[0].set_title("Pulses")
+        ax[0].set_xlim(0, t_max)
+
+        # right: populations (DDE solid, WW dashed)
+        ax[1].plot(t_list, p1_dde, label=r"DDE: $|c_1|^2$")
+        ax[1].plot(t_list, p2_dde, label=r"DDE: $|c_2|^2$")
+        if WW_sim:
+            ax[1].plot(t_WW, pop_WW[:, 0], "--", label=r"WW: $|c_1|^2$")
+            ax[1].plot(t_WW, pop_WW[:, 1], "--", label=r"WW: $|c_2|^2$")
+        ax[1].set_xlabel("t")
+        ax[1].set_ylabel("population")
+        ax[1].legend()
+        ax[1].set_title("Dynamics")
+        ax[1].set_xlim(0, t_max)
+
+        fig.tight_layout()
+
+    F = float(np.abs(c_dde[-1, 1]) ** 2)
+    return F
+
+
+def CZMK_Scan_T(T_list=None, gamma=0.1, tau=1.0, dt_max=0.01):
+    data1 = "expt_008_cache11.npz"
+    stirap = np.load(data1)
+
+    # ---------- case 1: use cached optimal (gamma_i, T_i) ----------
+    if T_list is None:
+        T_arr = np.asarray(stirap["T_opt"], float)
+        gamma_arr = np.asarray(stirap["gamma"], float)
+
+        F_list = np.array(
+            [
+                QST_CZMK(
+                    g,
+                    T,
+                    tau,
+                    dt_max=dt_max,
+                    phi=0.0,
+                    WW_sim=False,
+                    plot=False,
+                )
+                for g, T in zip(gamma_arr, T_arr)
+            ]
+        )
+
+        x = T_arr / tau
+        label = "CZMK (opt points)"
+
+    # ---------- case 2: fixed gamma, scan T ----------
+    else:
+        T_arr = np.asarray(T_list, float)
+
+        F_list = np.array(
+            [
+                QST_CZMK(
+                    gamma,
+                    T,
+                    tau,
+                    dt_max=0.01,
+                    phi=0.0,
+                    WW_sim=False,
+                    plot=False,
+                )
+                for T in T_arr
+            ]
+        )
+
+        x = T_arr / tau
+        label = rf"CZMK ($\gamma={gamma}$)"
+
+    # ---------- plot ----------
+    plt.plot(x, 1.0 - F_list, label=label)
+    plt.plot(x, np.exp(-gamma * x), label=r"$e^{-\gamma_{max} T}$")
+    plt.xlabel(r"$T/\tau$")
+    plt.ylabel(r"$1 - F$")
+    plt.yscale("log")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
+
+def fig_paper_QST_and_IF_vs_T(
+    data0="expt_002_cache.npz",
+    data1="expt_008_cache11.npz",
+    ww_data="expt_009_renormalized_WW_fidelity.npz",
+    tau=1.0,
+    gamma=0.1,
+    T_dyn=200.0,
+    dt_max=0.01,
+    phi=0.0,
+    figsize=(7.2, 3.0),
+    panel_labels=True,
+    save=None,
+    dpi=300,
+):
+    """
+    Two-panel figure using the global style set by qnetwork.tools.set_plot_style().
+
+    (a) Dynamics: DDE (black solid), WW (lightskyblue dashed), plus exp(-gamma t) ref.
+    (b) IF vs T (log-log): Swap/STIRAP lines + 3 WW scatter groups (3 colors) + inset zoom.
+
+    Requires: dde_scalar, WW, WG already imported.
+    """
+
+    # =============================
+    # (a) Left panel: dynamics
+    # =============================
+    t_max = T_dyn * tau
+
+    gamma1 = lambda t: 0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (t - 0.5 * t_max)))
+    gamma2 = (
+        lambda t: 0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (0.5 * t_max - t + tau)))
+    )
+
+    # --- DDE ---
+    t_list, c_dde = dde_scalar(
+        t_max=t_max,
+        gamma1=gamma1,
+        gamma2=gamma2,
+        phi=phi,
+        tau=tau,
+        dt_max=dt_max,
+    )
+    p_dde = np.abs(c_dde[:, :2]) ** 2
+
+    # --- WW ---
+    L = tau
+    positions = [0.0, L]
+
+    def g_time_mod(t):
+        m1 = np.sqrt(np.maximum(gamma1(t), 0.0) / gamma)
+        m2 = np.sqrt(np.maximum(gamma2(t), 0.0) / gamma)
+        return np.array(
+            [[m1], [m2]], dtype=float
+        )  # (2,1) for broadcasting to (2,n_modes)
+
+    ww = WW(
+        Delta=100,
+        positions=positions,
+        gamma=gamma,
+        n_modes=201,
+        L=L,
+        setup=WG.Cable,
+        g_time_modulation=g_time_mod,
+    )
+    t_WW, pop_WW = ww.evolve(t_max, n_steps=1001)
+
+    # =============================
+    # (b) Right panel: IF vs T
+    # =============================
+    swap = np.load(data0)
+    stirap = np.load(data1)
+    ww_opt = np.load(ww_data)
+
+    T_swap = swap["T"] / tau
+    IF_swap = 1.0 - swap["F"]
+
+    Td = stirap["T_opt"]
+    IF_stirap = 1.0 - stirap["F_opt"]
+    gamma_list = stirap["gamma"]
+
+    T_ww = ww_opt["T"]
+    D_ww = ww_opt["Delta"]
+    IF_ww = ww_opt["IF"].reshape(len(T_ww), len(D_ww))
+
+    # =============================
+    # Plot (assumes set_plot_style() already called globally)
+    # =============================
+    fig, ax = plt.subplots(1, 2, figsize=figsize, constrained_layout=True)
+
+    # ---- (a) dynamics ----
+    ax0 = ax[0]
+    # DDE (black)
+    ax0.plot(t_list / tau, p_dde[:, 0], "k", label=r"DDE: $|c_1|^2$")
+    ax0.plot(t_list / tau, p_dde[:, 1], "k", alpha=0.55, label=r"DDE: $|c_2|^2$")
+
+    # WW (lightskyblue dashed)
+    ax0.plot(
+        t_WW / tau,
+        pop_WW[:, 0],
+        linestyle="dashed",
+        color="lightskyblue",
+        label=r"WW: $|c_1|^2$",
+    )
+    ax0.plot(
+        t_WW / tau,
+        pop_WW[:, 1],
+        linestyle="dashed",
+        color="lightskyblue",
+        alpha=0.65,
+        label=r"WW: $|c_2|^2$",
+    )
+
+    ax0.set_xlabel(r"$t/\tau$")
+    ax0.set_ylabel("Population")
+    ax0.set_xlim(0, T_dyn)
+    ax0.set_ylim(-0.02, 1.02)
+    ax0.legend(frameon=False, loc="best")
+
+    # ---- (b) IF vs T ----
+    ax1 = ax[1]
+
+    cut_swap = 1500
+    cut_stirap = 900
+
+    ax1.plot(T_swap[:cut_swap], IF_swap[:cut_swap], "-", color="C0", label="Swap")
+    ax1.plot(Td[:cut_stirap], IF_stirap[:cut_stirap], "-", color="C1", label="STIRAP")
+
+    ax1.plot(
+        Td[:cut_stirap],
+        np.exp(-gamma_list[:cut_stirap] * Td[:cut_stirap]),
+        linestyle="--",
+        color="0.1",
+        lw=1.0,
+        label=r"$e^{-\gamma_{max} T}$",
+    )
+
+    idx = [0, 1, 2]
+    colors = ["C3", "C4", "C5"]
+    for j, col in zip(idx, colors):
+        ax1.scatter(
+            T_ww,
+            IF_ww[:, j],
+            s=24,
+            linewidths=1.0,
+            label=rf"Renorm.-WW ($\Delta={D_ww[j]:g}$)",
+            zorder=5,
+        )
+
+    ax1.set_xscale("log")
+    ax1.set_yscale("log")
+    ax1.set_xlabel(r"$T/\tau$")
+    ax1.set_ylabel(r"$1-F$")
+    ax1.set_xlim(1.0, None)
+    ax1.legend(frameon=False, loc="best")
+
+    # panel labels
+    if panel_labels:
+        ax0.text(0.02, 0.98, "(a)", transform=ax0.transAxes, va="top", ha="left")
+        ax1.text(0.02, 0.98, "(b)", transform=ax1.transAxes, va="top", ha="left")
+
+    if save:
+        fig.savefig(save, dpi=dpi)
+
+    plt.show()
+    return fig, ax
