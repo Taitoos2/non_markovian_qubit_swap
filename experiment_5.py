@@ -6,15 +6,15 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from matplotlib.ticker import FuncFormatter
 
 from scipy.interpolate import interp1d
-from aux_funs import average_fft,DDE_analytical,paralelizar
+from aux_funs import average_fft,DDE_analytical,paralelizar,fast_fft_zp
 plt.rcParams['mathtext.fontset'] = 'cm'
 
 def exp005(gamma:float=0.1,
 		   tau: float = 1,
 		   phi_range: list = list(np.linspace(-4*np.pi,4*np.pi,900)),
-		   t_max: float = 64,
-		   n_points: int = 12000,
-		   Ms: list = list(np.arange(12000,12021,1))
+		   t_max: float = 75,
+		   n_points: int = 15000,
+		   Ms: list = list(np.arange(14000,14011,1))
 		   ):
 	
 	t = np.linspace(0,t_max,n_points)
@@ -33,7 +33,8 @@ def exp005(gamma:float=0.1,
 	def sample_phi(phi):
 		J = DDE_analytical(gamma=gamma,phi=phi,tau=tau,t=t)
 		a = a_in(J_0=J,phi=phi)
-		w,u = average_fft(x=t,y=a,Ms=Ms)
+		#w,u = average_fft(x=t,y=a,Ms=Ms)
+		w,u = fast_fft_zp(t=t,y=a,pad_factor=5)
 		I = np.abs(u)**2
 		return [w,I]
 	
@@ -63,7 +64,7 @@ def exp005(gamma:float=0.1,
 		extent=[w_max/np.pi, w_min/np.pi,
 				phi_range[0]/np.pi, phi_range[-1]/np.pi],
 		aspect='auto',
-		norm=PowerNorm(gamma=0.46),
+		norm=PowerNorm(gamma=0.35), #0.46 for small gamma 
 					)
 	cbar = fig.colorbar(im, ax=ax)
 	cbar.set_label(r"Arbitrary Units ")
@@ -84,13 +85,13 @@ def exp005(gamma:float=0.1,
 						)
 
 	axins.plot(w_res/np.pi,I_res/1000)
-	axins.set_xlim(-1,1)
+	axins.set_xlim(-2.5,2.5)
 	axins.set_xlabel(r"$\nu \tau / \pi $")
 
-	fig.savefig('figure2_2.pdf')
+	fig.savefig('figure_2a.pdf')
 	plt.show()
 
 
 from qnetwork.tools import set_plot_style
 set_plot_style()
-exp005(gamma=1,phi_range =list(np.linspace(-3*np.pi,3*np.pi,2500)))
+exp005(gamma=0.15,phi_range =list(np.linspace(-3*np.pi,3*np.pi,1600)))
