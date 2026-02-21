@@ -221,22 +221,24 @@ def expt_002_swapspeed(
 
     # ---------- plot ----------
     fig, ax = plt.subplots(1, 2, figsize=(10, 4))
+    gamma_list = 2 * (g_list) ** 2
 
     # left: swap speed
-    ax[0].plot(g_list, t_list / tau, "-", label="Swap speed")
-    ax[0].plot(g_list, T_list / tau, "--", label=r"$\pi/\Omega$")
+    ax[0].plot(gamma_list, t_list / tau, "-", label="Swap speed")
+    ax[0].plot(gamma_list, T_list / tau, "--", label=r"$\pi/\Omega$")
     ax[0].set_xscale("log")
     ax[0].set_yscale("log")
-    ax[0].set_xlabel("g / FSR")
+    ax[0].set_xlabel(r"$\gamma \tau$")
     ax[0].set_ylabel("T / τ")
     ax[0].grid(True)
     ax[0].legend()
 
     # right: infidelity
-    ax[1].plot(g_list, 1 - F_list, "-", label="Infidelity")
+    ax[1].plot(gamma_list, 1 - F_list, "-", label="Infidelity")
+    ax[1].plot(gamma_list, (gamma_list), "-", label="Infidelity")
     ax[1].set_xscale("log")
     ax[1].set_yscale("log")
-    ax[1].set_xlabel("g / FSR")
+    ax[1].set_xlabel(r"$\gamma \tau$")
     ax[1].set_ylabel("1 − F")
     ax[1].grid(True)
     ax[1].legend()
@@ -251,6 +253,7 @@ def swap_appendix_graph(
     tau: float = 50.0,
     T: float = 100.0,
     dt_max: float = 0.01,
+    figsize=(12, 4),
 ):
     """One figure with 3 horizontal subplots: dynamics + swap speed + infidelity."""
     # ---------------- DDE dynamics ----------------
@@ -273,7 +276,7 @@ def swap_appendix_graph(
 
     set_plot_style()
     # ---------------- figure: 1x3 ----------------
-    fig, ax = plt.subplots(1, 3, figsize=(12, 4), sharey=False)
+    fig, ax = plt.subplots(3, 1, figsize=figsize, sharey=False)
     labels = ["(a)", "(b)", "(c)"]
     for i, lab in enumerate(labels):
         ax[i].text(
@@ -303,20 +306,22 @@ def swap_appendix_graph(
     ax[0].legend(frameon=False, loc="best")
 
     # (b) swap speed
-    ax[1].plot(g_list, t_list / tau, "-", label=r"$t_{\mathrm{swap}}/\tau$")
-    ax[1].plot(g_list, T_list / tau, "--", label=r"$\pi/\Omega$")
+    gamma_list = 2 * (g_list) ** 2
+    ax[1].plot(gamma_list, t_list / tau, "-", label=r"$T(\gamma_{\max})/\tau$")
+    ax[1].plot(gamma_list, T_list / tau, "--", label=r"$\pi/\Omega$")
     ax[1].set_xscale("log")
     ax[1].set_yscale("log")
-    ax[1].set_xlabel(r"$g/\mathrm{FSR}$")
+    ax[1].set_xlabel(r"$\gamma_{\max} \tau$")
     ax[1].set_ylabel(r"$T/\tau$")
     ax[1].grid(True, which="both", alpha=0.3)
     ax[1].legend(frameon=False, loc="best")
 
     # (c) infidelity
-    ax[2].plot(g_list, 1.0 - F_list, "-", label=r"$1-F$")
+    ax[2].plot(gamma_list, 1.0 - F_list, "-", label=r"$1-F$")
+    ax[2].plot(gamma_list, 1.5 * gamma_list, "--", label=r"$3\gamma_{\max}\tau/2$")
     ax[2].set_xscale("log")
     ax[2].set_yscale("log")
-    ax[2].set_xlabel(r"$g/\mathrm{FSR}$")
+    ax[2].set_xlabel(r"$\gamma_{\max} \tau$")
     ax[2].set_ylabel(r"$1-F$")
     ax[2].grid(True, which="both", alpha=0.3)
     ax[2].legend(frameon=False, loc="best")
@@ -532,8 +537,6 @@ def stirap_appendix_graph(
     save: str = "stirap_app.pdf",
     dpi: int = 600,
 ):
-    """2x2: (a)pulses (b)T-scan (c)Topt (d)IFopt"""
-
     T_list = np.asarray(T_list, float)
 
     def _safe_legend(a, **kw):
@@ -544,8 +547,7 @@ def stirap_appendix_graph(
     def _load_cache(path):
         d = np.load(path)
         g = np.asarray(d["gamma"], float)
-        x = np.sqrt(g / (2 * np.pi**2))
-        return x, np.asarray(d["T_opt"], float), np.asarray(d["F_opt"], float)
+        return g, np.asarray(d["T_opt"], float), np.asarray(d["F_opt"], float)
 
     # ---------- fixed-gamma T-scan ----------
     F_Tscan = np.asarray(
@@ -556,13 +558,12 @@ def stirap_appendix_graph(
     )
     IF_Tscan = 1.0 - F_Tscan
 
-    # ---------- pulse example ----------
+    # ---------- pulse  ----------
     g1, g2 = gamma_pulse(gamma, T_example, tau)
     tg = np.linspace(0.0, T_example * tau, 800)
     g1v = np.array([g1(t) for t in tg], float)
     g2v = np.array([g2(t) for t in tg], float)
 
-    # ---------- cache ----------
     x, Topt, Fopt = _load_cache(cache_file)
     x0, Topt0, Fopt0 = _load_cache(cache_file_nodelay)
 
@@ -602,20 +603,24 @@ def stirap_appendix_graph(
     # (c) T_opt vs g0/FSR
     a = ax[1, 0]
     # a.plot(x,  Topt,  "-", lw=2.0, label=r"$t_d=\tau/2$")
-    a.plot(x0, Topt0, "-", lw=2.0)
-    a.set(xlabel=r"$g_0/\mathrm{FSR}$", ylabel=r"$T_{\mathrm{opt}}/\tau$")
+    a.plot(x0, Topt0, "-", lw=2.0, label=r"$T(\gamma_{\max})/\tau$")
+    a.plot(x0, 9 / np.sqrt(x0), "--", lw=2.0, label=r"$9/\sqrt{\gamma_{\max} \tau}$")
+    a.set(xlabel=r"$\gamma_{\max} \tau$", ylabel=r"$T/\tau$")
     a.set_xscale("log")
     a.set_yscale("log")
     a.grid(True, which="both", alpha=0.30)
+    _safe_legend(a, frameon=False, fontsize=9)
 
     # (d) IF_opt vs g0/FSR
     a = ax[1, 1]
     # a.plot(x,  1.0 - Fopt,  "-", lw=2.0, label=r"$t_d=\tau/2$")
-    a.plot(x0, 1.0 - Fopt0, "-", lw=2.0)
-    a.set(xlabel=r"$g_0/\mathrm{FSR}$", ylabel=r"$1-F_{\mathrm{opt}}$")
+    a.plot(x0, 1.0 - Fopt0, "-", lw=2.0, label=r"$1-F$")
+    a.plot(x0, x0**2 / 50000, "--", lw=2.0, label=r"$(\gamma_{\max} \tau)^2/50000$")
+    a.set(xlabel=r"$\gamma_{\max} \tau$", ylabel=r"$1-F$")
     a.set_xscale("log")
     a.set_yscale("log")
     a.grid(True, which="both", alpha=0.30)
+    _safe_legend(a, frameon=False, fontsize=9)
 
     fig.tight_layout()
     if save:
@@ -629,29 +634,28 @@ def renormalize_WW_opimized(
     T,
     Delta_guess=0.0,
     tau=1.0,
-    dt_max=0.005,
-    pulse_delay=True,
+    dt_max=0.001,
+    pulse_delay=False,
     PBC: bool = False,
     n_modes: int = 50,
     n_steps: int = 101,
     plot=True,
     opt=True,
 ):
-    # ---------- geometry / times ----------
+    # ---------- paras ----------
     c = 1.0
     setup_kind = WG.Ring if PBC else WG.Cable
     L = (2.0 if PBC else 1.0) * tau * c
     positions = [0.0, L / 2.0] if PBC else [0.0, L]
     tmax = T * tau
 
-    # ---------- reference DDE ----------
     g1_ref, g2_ref = (gamma_pulse_delay if pulse_delay else gamma_pulse)(
         gamma_guess, T, tau
     )
     t_dde, y_dde = dde_scalar(
         t_max=tmax, gamma1=g1_ref, gamma2=g2_ref, phi=0.0, tau=tau, dt_max=dt_max
     )
-    # ---------- cleanup t-grid for interp (dedup) ----------
+
     idx = np.argsort(t_dde)
     t_dde = t_dde[idx]
     y_dde = y_dde[idx]
@@ -668,8 +672,6 @@ def renormalize_WW_opimized(
         assume_sorted=True,
     )
 
-    # ---------- time modulation ----------
-
     if pulse_delay:
         den = 2.0 * (T - 1.0) * tau
 
@@ -679,14 +681,13 @@ def renormalize_WW_opimized(
             return np.array([[g1], [g2]], dtype=float)
 
     else:
-        den = 2.0 * tau
+        den = 2.0 * T * tau
 
         def g_time_mod(t):
             g1 = np.sin(np.pi * t / den)
             g2 = np.cos(np.pi * t / den)
             return np.array([[g1], [g2]], dtype=float)
 
-    # ---------- loss ----------
     def cost_func(x):
         Delta, gamma = x
         ww = WW(
@@ -716,9 +717,15 @@ def renormalize_WW_opimized(
             method="L-BFGS-B",
             bounds=(
                 (max(Delta_guess - 0.5, 1e-6), Delta_guess + 0.5),
-                (0.5 * gamma_guess, 1.5 * gamma_guess),
+                (max(0.5 * gamma_guess, 1e-12), 1.5 * gamma_guess),
             ),
+            options={
+                "ftol": 1e-10,
+                "gtol": 1e-10,
+                "eps": 1e-8,
+            },
         )
+
         Delta_opt, gamma_opt = res.x
         loss_opt = res.fun
     else:
@@ -771,7 +778,7 @@ def renormalize_WW_opimized(
 
 # -----------------------------------------------------
 def expt_009_renormalized_WW_fidelity(
-    Delta_list=(100.0, 5.0, 1.0),
+    Delta_list=(50.0, 5.0, 1.0),
     data="expt_008_cache11_nodelay.npz",
     idx_gamma=(40, 80, 100),
     n_jobs=-1,
@@ -803,10 +810,11 @@ def expt_009_renormalized_WW_fidelity(
             gamma_guess=g,
             T=T,
             Delta_guess=D,
-            n_modes=201,
-            n_steps=int(T / 0.005),
+            n_modes=101,
+            dt_max=0.001,
+            n_steps=int(T / 0.001),
             plot=False,
-            pulse_delay=True,
+            pulse_delay=False,
             opt=True,
         )
         return IF
@@ -830,7 +838,7 @@ def expt_009_renormalized_WW_fidelity(
 # --------------------------------------------------------
 def plot_IF_vs_T(
     data0="expt_002_cache.npz",
-    data1="expt_008_cache11.npz",
+    data1="expt_008_cache11_nodelay.npz",
     ww_data="expt_009_renormalized_WW_fidelity.npz",
     tau=1.0,
 ):
@@ -854,12 +862,12 @@ def plot_IF_vs_T(
     # ---------- plot ----------
     fig, ax = plt.subplots(figsize=(9, 6))
 
-    # Swap (baseline)
+    # Swap
     ax.plot(T_swap, IF_swap, "-", lw=2.8, label="Swap (expt_002)")
 
     # STIRAP
     ax.plot(Td, 1 - Fd, "--", label="STIRAP (delay)")
-    # dark state condition
+    ax.plot(Td, 1 / Td**4.5)
 
     # WW scatter
     for i, D in enumerate(D_ww):
@@ -893,7 +901,7 @@ def QST_CZMK(gamma, T, tau, dt_max=0.01, phi=0.0, WW_sim=True, plot=True):
 
     t_max = T * tau
 
-    # pulses (kept as your latest form)
+    # pulses
     gamma1 = lambda t: 0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (t - 0.5 * t_max)))
     gamma2 = (
         lambda t: 0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (0.5 * t_max - t + tau)))
@@ -937,7 +945,7 @@ def QST_CZMK(gamma, T, tau, dt_max=0.01, phi=0.0, WW_sim=True, plot=True):
             )
 
         ww = WW(
-            Delta=100,
+            Delta=50,
             positions=positions,
             gamma=gamma,
             n_modes=201,
@@ -947,7 +955,6 @@ def QST_CZMK(gamma, T, tau, dt_max=0.01, phi=0.0, WW_sim=True, plot=True):
         )
         t_WW, pop_WW = ww.evolve(t_max, n_steps=1001)
     if plot:
-        # --- 1×2 layout: left pulses, right populations ---
         fig, ax = plt.subplots(1, 2, figsize=(10, 3.6))
 
         # left: pulses
@@ -959,7 +966,6 @@ def QST_CZMK(gamma, T, tau, dt_max=0.01, phi=0.0, WW_sim=True, plot=True):
         ax[0].set_title("Pulses")
         ax[0].set_xlim(0, t_max)
 
-        # right: populations (DDE solid, WW dashed)
         ax[1].plot(t_list, p1_dde, label=r"DDE: $|c_1|^2$")
         ax[1].plot(t_list, p2_dde, label=r"DDE: $|c_2|^2$")
         if WW_sim:
@@ -977,64 +983,90 @@ def QST_CZMK(gamma, T, tau, dt_max=0.01, phi=0.0, WW_sim=True, plot=True):
     return F
 
 
-def CZMK_Scan_T(T_list=None, gamma=0.1, tau=1.0, dt_max=0.01):
-    data1 = "expt_008_cache11.npz"
-    stirap = np.load(data1)
+def CZMK_Scan_T(
+    T_list=None,
+    gamma=0.1,
+    tau=1.0,
+    dt_max=0.01,
+    force_recompute=False,
+    cache_file="czmk_opt_from_stirap.npz",
+    filename="czmk_app.pdf",
+    show=True,
+):
+    """
+    T_list is None: use STIRAP optimal points (gamma_i, T_i)
+    else          : fixed gamma, scan T_list
+    """
 
-    # ---------- case 1: use cached optimal (gamma_i, T_i) ----------
+    def _load_or_compute(cache_file, compute_fn):
+        if (not os.path.exists(cache_file)) or force_recompute:
+            data = compute_fn()
+            np.savez(cache_file, **data)
+        return np.load(cache_file)
+
     if T_list is None:
+        stirap = np.load("expt_008_cache11_nodelay.npz")
         T_arr = np.asarray(stirap["T_opt"], float)
         gamma_arr = np.asarray(stirap["gamma"], float)
 
-        F_list = np.array(
-            [
-                QST_CZMK(
-                    g,
-                    T,
-                    tau,
-                    dt_max=dt_max,
-                    phi=0.0,
-                    WW_sim=False,
-                    plot=False,
-                )
-                for g, T in zip(gamma_arr, T_arr)
-            ]
-        )
+        def compute():
+            F = np.array(
+                [
+                    QST_CZMK(
+                        g, T, tau, dt_max=dt_max, phi=0.0, WW_sim=False, plot=False
+                    )
+                    for g, T in zip(gamma_arr, T_arr)
+                ]
+            )
+            return dict(T=T_arr, gamma=gamma_arr, F=F)
 
+        data = _load_or_compute(cache_file, compute)
+        T_arr = data["T"]
+        gamma_arr = data["gamma"]
+        F_arr = data["F"]
         x = T_arr / tau
-        label = "CZMK (opt points)"
-
-    # ---------- case 2: fixed gamma, scan T ----------
+        y_ref = np.exp(-gamma_arr * (x - 1))
     else:
         T_arr = np.asarray(T_list, float)
+        cache_file = f"czmk_scan_gamma_{gamma:.3f}.npz"
 
-        F_list = np.array(
-            [
-                QST_CZMK(
-                    gamma,
-                    T,
-                    tau,
-                    dt_max=0.01,
-                    phi=0.0,
-                    WW_sim=False,
-                    plot=False,
-                )
-                for T in T_arr
-            ]
-        )
+        def compute():
+            F = np.array(
+                [
+                    QST_CZMK(
+                        gamma, T, tau, dt_max=dt_max, phi=0.0, WW_sim=False, plot=False
+                    )
+                    for T in T_arr
+                ]
+            )
+            return dict(T=T_arr, gamma=gamma, F=F)
 
+        data = _load_or_compute(cache_file, compute)
+        T_arr = data["T"]
+        F_arr = data["F"]
         x = T_arr / tau
-        label = rf"CZMK ($\gamma={gamma}$)"
+        y_ref = np.exp(-gamma_arr * (x - 1))
+
+    y = 1.0 - F_arr
 
     # ---------- plot ----------
-    plt.plot(x, 1.0 - F_list, label=label)
-    plt.plot(x, np.exp(-gamma * x), label=r"$e^{-\gamma_{max} T}$")
+    set_plot_style()
+    plt.figure(figsize=(3.5, 3))
+    plt.plot(x[:940], y[:940], "-", label="sech-shape")
+    plt.plot(x[:940], y_ref[:940], "--", label=r"$e^{-\gamma T}$")
     plt.xlabel(r"$T/\tau$")
     plt.ylabel(r"$1 - F$")
+    plt.xscale("log")
     plt.yscale("log")
     plt.legend()
     plt.tight_layout()
-    plt.show()
+
+    if filename:
+        plt.savefig(filename, dpi=600, bbox_inches="tight")
+    if show:
+        plt.show()
+    else:
+        plt.close()
 
 
 def fig_paper_QST_and_IF_vs_T(
@@ -1075,9 +1107,8 @@ def fig_paper_QST_and_IF_vs_T(
             va=va,
         )
 
-    # =============================
     # (a) dynamics
-    # =============================
+
     t_max = T_dyn * tau
     gamma1 = lambda t: 0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (t - 0.5 * t_max)))
     gamma2 = (
@@ -1107,9 +1138,8 @@ def fig_paper_QST_and_IF_vs_T(
     )
     t_WW, pop_WW = ww.evolve(t_max, n_steps=1001)
 
-    # =============================
     # (b) IF vs T
-    # =============================
+
     swap = np.load(data0)
     stirap = np.load(data1)
     ww_opt = np.load(ww_data)
@@ -1119,11 +1149,10 @@ def fig_paper_QST_and_IF_vs_T(
     T_ww, D_ww = ww_opt["T"], ww_opt["Delta"]
     IF_ww = ww_opt["IF"].reshape(len(T_ww), len(D_ww))
 
-    # =============================
     # plot
-    # =============================
+
     set_plot_style()
-    fig, (ax0, ax1) = plt.subplots(1, 2, figsize=figsize, constrained_layout=True)
+    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=figsize, constrained_layout=True)
     _panel_label(ax0, "(a)")
     _panel_label(ax1, "(b)")
 
@@ -1155,35 +1184,34 @@ def fig_paper_QST_and_IF_vs_T(
 
     ax1.plot(
         Td[:cut_stirap],
-        np.exp(-gamma_list[:cut_stirap] * Td[:cut_stirap] / 2),
+        np.exp(-gamma_list[:cut_stirap] * (Td[:cut_stirap] - 1)),
         "--",
-        color="0.3",
-        lw=1.0,
-        alpha=0.8,
-    )
-    ax1.plot(
-        Td[:cut_stirap],
-        np.exp(-gamma_list[:cut_stirap] * Td[:cut_stirap]),
-        "-",
-        color="0.3",
-        lw=1.0,
-        alpha=0.8,
+        color="#0D6653B8",
+        lw=1.2,
     )
 
+    markers = ["O", "D", "^"]
     colors = ["#8172b3", "#937860", "#ccb974"]
-    for j, col in zip([0, 1, 2], colors):
+    colors_ww = ["#587281", "#B8D8D8", "#F4A261"]
+
+    markers = ["o", "D", "^"]
+    sizes = [55, 40, 70]
+    edge_widths = [0.8, 0.8, 1.0]
+
+    for j, (col, marker, s, ew) in enumerate(zip(colors, markers, sizes, edge_widths)):
         ax1.scatter(
             T_ww,
             IF_ww[:, j],
-            s=28,
-            linewidths=1.0,
+            s=s,
+            linewidths=ew,
             color=col,
+            edgecolor="white",
+            marker=marker,
             label=rf"$\Delta/\omega_\mathrm{{FSR}}={D_ww[j]:g}$",
             zorder=5,
         )
 
-    # keep your annotation indices/positions unchanged
-    i_swap, i_sti = 1170, 518
+    i_swap, i_sti = 870, 518
     _annot(
         ax1,
         "SWAP",
@@ -1199,8 +1227,8 @@ def fig_paper_QST_and_IF_vs_T(
         "STIRAP",
         Td[i_sti],
         IF_stirap[i_sti],
-        Td[i_sti] * 0.8,
-        IF_stirap[i_sti] * 0.2,
+        Td[i_sti] * 0.7,
+        IF_stirap[i_sti] * 2.5,
         ha="right",
         va="top",
     )
@@ -1208,10 +1236,13 @@ def fig_paper_QST_and_IF_vs_T(
     ax1.set(xlabel=r"$T/\tau$", ylabel=r"$1-F$")
     ax1.set_xscale("log")
     ax1.set_yscale("log")
+    ax1.set_ylim(1e-10, 1)
     # ax1.set_xlim(1.01, None)
-    ax1.legend(frameon=False, loc="best")
+    ax1.legend(
+        frameon=False,
+        loc=(0.05, 0.02),
+    )
 
     if save is not None:
         fig.savefig(save, dpi=dpi, bbox_inches="tight")
     plt.show()
-    return fig, (ax0, ax1)
