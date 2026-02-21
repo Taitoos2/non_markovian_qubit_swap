@@ -178,7 +178,6 @@ def expt_002_swapspeed(
 ):
     fpath = filename
 
-    # ---------- load ----------
     if os.path.exists(fpath) and not overwrite:
         print(f"[load] {fpath}")
         data = np.load(fpath)
@@ -187,7 +186,6 @@ def expt_002_swapspeed(
         t_list = data["t"]
         F_list = data["F"]
 
-    # ---------- compute ----------
     else:
         if gamma_list is None:
             raise ValueError(
@@ -223,7 +221,7 @@ def expt_002_swapspeed(
     fig, ax = plt.subplots(1, 2, figsize=(10, 4))
     gamma_list = 2 * (g_list) ** 2
 
-    # left: swap speed
+    #  swap speed
     ax[0].plot(gamma_list, t_list / tau, "-", label="Swap speed")
     ax[0].plot(gamma_list, T_list / tau, "--", label=r"$\pi/\Omega$")
     ax[0].set_xscale("log")
@@ -233,7 +231,7 @@ def expt_002_swapspeed(
     ax[0].grid(True)
     ax[0].legend()
 
-    # right: infidelity
+    #  infidelity
     ax[1].plot(gamma_list, 1 - F_list, "-", label="Infidelity")
     ax[1].plot(gamma_list, (gamma_list), "-", label="Infidelity")
     ax[1].set_xscale("log")
@@ -256,7 +254,7 @@ def swap_appendix_graph(
     figsize=(12, 4),
 ):
     """One figure with 3 horizontal subplots: dynamics + swap speed + infidelity."""
-    # ---------------- DDE dynamics ----------------
+
     initial = "10"
     tmax = T * tau
     phi = math.modf(Delta)[0] * np.pi
@@ -267,7 +265,6 @@ def swap_appendix_graph(
     setup_dde.evolve(tmax)
     t_DDE, pop_DDE = setup_dde.n_photons(initial)
 
-    # ---------------- swap cache ----------------
     data = np.load("expt_002_cache.npz")
     g_list = data["g"]
     T_list = data["T"]
@@ -275,7 +272,7 @@ def swap_appendix_graph(
     F_list = data["F"]
 
     set_plot_style()
-    # ---------------- figure: 1x3 ----------------
+
     fig, ax = plt.subplots(3, 1, figsize=figsize, sharey=False)
     labels = ["(a)", "(b)", "(c)"]
     for i, lab in enumerate(labels):
@@ -381,13 +378,11 @@ def expt_004_stirap_T_scan(
     gamma = gamma
     T_list = np.asarray(T_list, float)
 
-    # ---- parallel scan over T ----
     results = Parallel(n_jobs=n_jobs, backend="loky", prefer="processes")(
         delayed(Fidelity)(gamma, tau, phi, T, dt_max, pulse_delay) for T in T_list
     )
     F = np.array(results)
 
-    # ---- pulse plot (use first T) ----
     T_example = 10
     gamma1d, gamma2d = gamma_pulse_delay(gamma, T_example, tau)
 
@@ -458,7 +453,6 @@ def expt_008_ScanGamma_Refined(
 ):
     gamma_list = np.asarray(gamma_list, float)
 
-    # ---------- load cache ----------
     def _plot_008(gamma, T_opt, F_opt):
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4))
 
@@ -536,15 +530,11 @@ def stirap_appendix_graph(
     cache_file_nodelay: str = "expt_008_cache11_nodelay.npz",
     save: str = "stirap_app.pdf",
     dpi: int = 600,
+    figsize=(12, 8),
 ):
     T_list = np.asarray(T_list, float)
 
-    def _safe_legend(a, **kw):
-        h, _ = a.get_legend_handles_labels()
-        if h:
-            a.legend(**kw)
-
-    def _load_cache(path):
+    def load_cache(path):
         d = np.load(path)
         g = np.asarray(d["gamma"], float)
         return g, np.asarray(d["T_opt"], float), np.asarray(d["F_opt"], float)
@@ -557,70 +547,54 @@ def stirap_appendix_graph(
         float,
     )
     IF_Tscan = 1.0 - F_Tscan
+    x0, Topt0, Fopt0 = load_cache(cache_file_nodelay)
 
-    # ---------- pulse  ----------
-    g1, g2 = gamma_pulse(gamma, T_example, tau)
-    tg = np.linspace(0.0, T_example * tau, 800)
-    g1v = np.array([g1(t) for t in tg], float)
-    g2v = np.array([g2(t) for t in tg], float)
-
-    x, Topt, Fopt = _load_cache(cache_file)
-    x0, Topt0, Fopt0 = _load_cache(cache_file_nodelay)
+    if np.any(x0 <= 0):
+        raise ValueError(
+            "x0 contains non-positive values; cannot use log-scale for gamma axis."
+        )
 
     # ---------- plot ----------
     set_plot_style()
-    fig, ax = plt.subplots(2, 2, figsize=(7.2, 5.2))
-    for a, lab in zip(ax.flat, ["(a)", "(b)", "(c)", "(d)"]):
+    fig, ax = plt.subplots(3, 1, figsize=figsize, sharex=False)
+
+    for a, lab in zip(ax, ["(a)", "(b)", "(c)"]):
         a.text(
-            -0.18, 1.08, lab, transform=a.transAxes, va="top", ha="left", clip_on=False
+            -0.18,
+            1.08,
+            lab,
+            transform=a.transAxes,
+            va="top",
+            ha="left",
+            clip_on=False,
         )
 
-    # (a) pulses
-    a = ax[0, 0]
-    a.plot(
-        tg / tau,
-        np.sqrt(np.clip(g1v, 0, None) / (2.0 * tau)) / np.pi,
-        "-",
-        label=r"$g_1(t)$",
-    )
-    a.plot(
-        tg / tau,
-        np.sqrt(np.clip(g2v, 0, None) / (2.0 * tau)) / np.pi,
-        "-",
-        label=r"$g_2(t)$",
-    )
-    a.set(xlabel=r"$t/\tau$", ylabel=r"$g(t)$")
-    a.grid(True, alpha=0.25)
-    _safe_legend(a, frameon=False, fontsize=9)
-
-    # (b) T-scan
-    a = ax[0, 1]
+    # (a) T-scan
+    a = ax[0]
     a.plot(T_list, IF_Tscan, "-", lw=1.6)
     a.set(xlabel=r"$T/\tau$", ylabel=r"$1-F$")
     a.set_yscale("log")
     a.grid(True, which="both", alpha=0.30)
 
-    # (c) T_opt vs g0/FSR
-    a = ax[1, 0]
-    # a.plot(x,  Topt,  "-", lw=2.0, label=r"$t_d=\tau/2$")
+    # (b) T_opt vs gamma
+    a = ax[1]
     a.plot(x0, Topt0, "-", lw=2.0, label=r"$T(\gamma_{\max})/\tau$")
-    a.plot(x0, 9 / np.sqrt(x0), "--", lw=2.0, label=r"$9/\sqrt{\gamma_{\max} \tau}$")
-    a.set(xlabel=r"$\gamma_{\max} \tau$", ylabel=r"$T/\tau$")
+    a.plot(x0, 9 / np.sqrt(x0), "--", lw=2.0, label=r"$9/\sqrt{\gamma_{\max}\tau}$")
+    a.set(xlabel=r"$\gamma_{\max}\tau$", ylabel=r"$T/\tau$")
     a.set_xscale("log")
     a.set_yscale("log")
     a.grid(True, which="both", alpha=0.30)
-    _safe_legend(a, frameon=False, fontsize=9)
+    a.legend(frameon=False, fontsize=9)
 
-    # (d) IF_opt vs g0/FSR
-    a = ax[1, 1]
-    # a.plot(x,  1.0 - Fopt,  "-", lw=2.0, label=r"$t_d=\tau/2$")
+    # (c) IF_opt vs gamma
+    a = ax[2]
     a.plot(x0, 1.0 - Fopt0, "-", lw=2.0, label=r"$1-F$")
-    a.plot(x0, x0**2 / 50000, "--", lw=2.0, label=r"$(\gamma_{\max} \tau)^2/50000$")
-    a.set(xlabel=r"$\gamma_{\max} \tau$", ylabel=r"$1-F$")
+    a.plot(x0, x0**2 / 50000, "--", lw=2.0, label=r"$(\gamma_{\max}\tau)^2/50000$")
+    a.set(xlabel=r"$\gamma_{\max}\tau$", ylabel=r"$1-F$")
     a.set_xscale("log")
     a.set_yscale("log")
     a.grid(True, which="both", alpha=0.30)
-    _safe_legend(a, frameon=False, fontsize=9)
+    a.legend(frameon=False, fontsize=9)
 
     fig.tight_layout()
     if save:

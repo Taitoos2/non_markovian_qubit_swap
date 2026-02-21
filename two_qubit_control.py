@@ -170,7 +170,7 @@ class EmittersInWaveguide:
                     * np.cos(self.k * x)
                 )
 
-        # Setup time-dependent coupling (MINIMAL CHANGE)
+        # Setup time-dependent coupling
         if g_time_modulation is None:
             self.gk = self.gk_base
         else:
@@ -251,7 +251,6 @@ class EmittersInWaveguideWW(EmittersInWaveguide):
         )
         A11 = diags_array(self.wk, offsets=0, shape=(self.n_modes, self.n_modes))
 
-        # Get time-dependent coupling (MINIMAL CHANGE)
         gk_t = self.gk(t) if callable(self.gk) else self.gk
 
         A01 = csr_array(gk_t)
