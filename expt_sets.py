@@ -16,6 +16,7 @@ from two_qubit_control import EmittersInWaveguideWW as WW
 from two_qubit_control import Waveguide as WG
 from scipy.integrate import trapezoid
 from qnetwork.tools import set_plot_style
+import matplotlib as mpl
 
 
 def expt_001_dynamics(
@@ -251,81 +252,106 @@ def swap_appendix_graph(
     tau: float = 50.0,
     T: float = 100.0,
     dt_max: float = 0.01,
-    figsize=(12, 4),
+    figsize=(7.2, 7.2),
+    hspace: float = 0.10,
+    save: str = "fig_swap_app.pdf",
+    dpi: int = 600,
 ):
-    """One figure with 3 horizontal subplots: dynamics + swap speed + infidelity."""
+    """Appendix figure:
+    (a) SWAP dynamics (populations + ideal Rabi point)
+    (b) optimal duration vs gamma from cache
+    (c) optimal infidelity vs gamma from cache
+    """
 
     initial = "10"
     tmax = T * tau
     phi = math.modf(Delta)[0] * np.pi
 
-    setup_dde = EmittersInWaveguideDDE(
+    # ---------- DDE simulation ----------
+    dde = EmittersInWaveguideDDE(
         phi=phi, N=2, gamma=gamma, U=-1, tau=tau, dt_max=dt_max
     )
-    setup_dde.evolve(tmax)
-    t_DDE, pop_DDE = setup_dde.n_photons(initial)
+    dde.evolve(tmax)
+    t_DDE, pop_DDE = dde.n_photons(initial)
 
-    data = np.load("expt_002_cache.npz")
-    g_list = data["g"]
-    T_list = data["T"]
-    t_list = data["t"]
-    F_list = data["F"]
+    # ---------- load cache ----------
+    d = np.load("expt_002_cache.npz")
+    g_list = np.asarray(d["g"], float)
+    T_list = np.asarray(d["T"], float)
+    t_list = np.asarray(d["t"], float)
+    F_list = np.asarray(d["F"], float)
 
-    set_plot_style()
+    gamma_list = 2 * g_list**2
 
-    fig, ax = plt.subplots(3, 1, figsize=figsize, sharey=False)
-    labels = ["(a)", "(b)", "(c)"]
-    for i, lab in enumerate(labels):
-        ax[i].text(
-            -0.15,
-            1.05,
-            lab,
-            transform=ax[i].transAxes,
-            va="top",
-            ha="left",
-            clip_on=False,
-        )
-
-    # (a) dynamics
-    ax[0].plot(t_DDE / tau, pop_DDE[:, 0], "--", color="#055805", label=r"$Q_1$")
-    ax[0].plot(t_DDE / tau, pop_DDE[:, 1], "-", color="#055805", label=r"$Q_2$")
-
-    # Rabi period line
-    g = np.sqrt(gamma / (2 * tau))
-    Omega = np.sqrt(2) * g
+    g0 = np.sqrt(gamma / (2 * tau))
+    Omega = np.sqrt(2) * g0
     T_rabi = np.pi / Omega
-    ax[0].axvline(
-        T_rabi, linestyle="--", color="black", alpha=0.3, label=r"$\pi/\Omega$"
-    )
 
-    ax[0].set_xlabel(r"$t/\tau$")
-    ax[0].set_ylabel(r"$\langle \sigma^\dagger \sigma \rangle$")
-    ax[0].legend(frameon=False, loc="best")
+    # ---------- plot ----------
+    with plt.rc_context():
+        set_plot_style()
+        plt.rcParams["axes.grid"] = False
 
-    # (b) swap speed
-    gamma_list = 2 * (g_list) ** 2
-    ax[1].plot(gamma_list, t_list / tau, "-", label=r"$T(\gamma_{\max})/\tau$")
-    ax[1].plot(gamma_list, T_list / tau, "--", label=r"$\pi/\Omega$")
-    ax[1].set_xscale("log")
-    ax[1].set_yscale("log")
-    ax[1].set_xlabel(r"$\gamma_{\max} \tau$")
-    ax[1].set_ylabel(r"$T/\tau$")
-    ax[1].grid(True, which="both", alpha=0.3)
-    ax[1].legend(frameon=False, loc="best")
+        fig, ax = plt.subplots(3, 1, figsize=figsize, gridspec_kw=dict(hspace=hspace))
 
-    # (c) infidelity
-    ax[2].plot(gamma_list, 1.0 - F_list, "-", label=r"$1-F$")
-    ax[2].plot(gamma_list, 1.5 * gamma_list, "--", label=r"$3\gamma_{\max}\tau/2$")
-    ax[2].set_xscale("log")
-    ax[2].set_yscale("log")
-    ax[2].set_xlabel(r"$\gamma_{\max} \tau$")
-    ax[2].set_ylabel(r"$1-F$")
-    ax[2].grid(True, which="both", alpha=0.3)
-    ax[2].legend(frameon=False, loc="best")
+        def place_labels(a, xlabel, ylabel, x=(-0.0, -0.2), y=(-0.12, 0.5)):
+            a.set_xlabel(xlabel)
+            a.set_ylabel(ylabel)
+            a.xaxis.set_label_coords(0.5, x[1])
+            a.yaxis.set_label_coords(y[0], y[1])
 
-    fig.tight_layout()
-    fig.savefig("swap_app.pdf", dpi=600)
-    plt.show()
+        def panel(a, lab, xy=(-0.2, 1.02)):
+            a.text(*xy, lab, transform=a.transAxes, ha="left", va="bottom", fontsize=16)
+
+        # ========== (a) dynamics ==========
+        a = ax[0]
+        a.plot(t_DDE / tau, pop_DDE[:, 0], "--", lw=2.0, label=r"$Q_1$")
+        a.plot(t_DDE / tau, pop_DDE[:, 1], "-", lw=2.0, label=r"$Q_2$")
+        a.axvline(T_rabi / tau, ls="--", c="k", alpha=0.3, label=r"$\pi/\Omega$")
+        # a.grid(True, which="both", alpha=0.30)
+        a.legend(frameon=False)
+        place_labels(a, r"$t/\tau$", r"$\langle \sigma^\dagger \sigma \rangle$")
+        panel(a, "(a)")
+
+        # ========== (b) T_opt vs gamma ==========
+        a = ax[1]
+        a.plot(
+            gamma_list * tau,
+            t_list / tau,
+            "-",
+            lw=2.0,
+            label=r"$T_{\mathrm{opt}}/\tau$",
+        )
+        a.plot(gamma_list * tau, T_list / tau, "--", lw=2.0, label=r"$\pi/\Omega$")
+        a.set_xscale("log")
+        a.set_yscale("log")
+        # a.grid(True, which="both", alpha=0.30)
+        a.legend(frameon=False)
+        place_labels(a, r"$\gamma_{\max}\tau$", r"$T/\tau$")
+        panel(a, "(b)")
+
+        # ========== (c) infidelity ==========
+        a = ax[2]
+        a.plot(gamma_list * tau, 1.0 - F_list, "-", lw=2.0, label=r"$1-F$")
+        a.plot(
+            gamma_list * tau,
+            1.5 * (gamma_list * tau),
+            "--",
+            lw=2.0,
+            label=r"$\frac{3\gamma_{\max}\tau}{2}$",
+        )
+        a.set_xscale("log")
+        a.set_yscale("log")
+        # a.grid(True, which="both", alpha=0.30)
+        a.legend(frameon=False)
+        place_labels(a, r"$\gamma_{\max}\tau$", r"$1-F$")
+        panel(a, "(c)")
+
+        fig.subplots_adjust(left=0.14, right=0.98, top=0.98, bottom=0.10, hspace=hspace)
+
+        if save:
+            fig.savefig(save, dpi=dpi, bbox_inches="tight")
+        plt.show()
 
 
 # ==================================================================================
@@ -525,19 +551,22 @@ def stirap_appendix_graph(
     dt_max: float = 0.01,
     pulse_delay: bool = True,
     n_jobs: int = -1,
-    T_example: float = 10.0,
     cache_file: str = "expt_008_cache11.npz",
     cache_file_nodelay: str = "expt_008_cache11_nodelay.npz",
-    save: str = "stirap_app.pdf",
+    save: str = "fig_stirap_app.pdf",
     dpi: int = 600,
-    figsize=(12, 8),
+    figsize=(7.2, 7.2),
+    hspace: float = 0.10,
 ):
     T_list = np.asarray(T_list, float)
 
-    def load_cache(path):
+    def load_cache(path: str):
         d = np.load(path)
-        g = np.asarray(d["gamma"], float)
-        return g, np.asarray(d["T_opt"], float), np.asarray(d["F_opt"], float)
+        return (
+            np.asarray(d["gamma"], float),
+            np.asarray(d["T_opt"], float),
+            np.asarray(d["F_opt"], float),
+        )
 
     # ---------- fixed-gamma T-scan ----------
     F_Tscan = np.asarray(
@@ -549,57 +578,70 @@ def stirap_appendix_graph(
     IF_Tscan = 1.0 - F_Tscan
     x0, Topt0, Fopt0 = load_cache(cache_file_nodelay)
 
-    if np.any(x0 <= 0):
-        raise ValueError(
-            "x0 contains non-positive values; cannot use log-scale for gamma axis."
-        )
-
     # ---------- plot ----------
-    set_plot_style()
-    fig, ax = plt.subplots(3, 1, figsize=figsize, sharex=False)
+    with plt.rc_context():
+        set_plot_style()
+        plt.rcParams["axes.grid"] = False
 
-    for a, lab in zip(ax, ["(a)", "(b)", "(c)"]):
-        a.text(
-            -0.18,
-            1.08,
-            lab,
-            transform=a.transAxes,
-            va="top",
-            ha="left",
-            clip_on=False,
+        fig, ax = plt.subplots(3, 1, figsize=figsize, gridspec_kw=dict(hspace=hspace))
+
+        def place_labels(a, xlabel, ylabel, x=(-0.0, -0.2), y=(-0.12, 0.5)):
+            a.set_xlabel(xlabel)
+            a.set_ylabel(ylabel)
+            a.xaxis.set_label_coords(0.5, x[1])
+            a.yaxis.set_label_coords(y[0], y[1])
+
+        def panel(a, lab, xy=(-0.2, 1.02)):
+            a.text(
+                *xy,
+                lab,
+                transform=a.transAxes,
+                ha="left",
+                va="bottom",
+                fontsize=16,
+            )
+
+        # ========== (a) ==========
+        a = ax[0]
+        a.plot(gamma * T_list, IF_Tscan, "-", lw=2.0)
+        a.set_yscale("log")
+        # a.grid(True, which="both", alpha=0.30)
+        place_labels(a, r"$\gamma_{\max}T$", r"$1-F$")
+        panel(a, "(a)")
+
+        # ========== (b) ==========
+        a = ax[1]
+        a.plot(x0, Topt0, "-", lw=2.0, label=r"$T(\gamma_{\max})/\tau$")
+        a.plot(x0, 9 / np.sqrt(x0), "--", lw=2.0, label=r"$9/\sqrt{\gamma_{\max}\tau}$")
+        a.set_xscale("log")
+        a.set_yscale("log")
+        # a.grid(True, which="both", alpha=0.30)
+        a.legend(frameon=False)
+        place_labels(a, r"$\gamma_{\max}\tau$", r"$T/\tau$")
+        panel(a, "(b)")
+
+        # ========== (c) ==========
+        a = ax[2]
+        a.plot(x0, 1.0 - Fopt0, "-", lw=2.0, label=r"$1-F$")
+        a.plot(
+            x0,
+            x0**2 / 50000,
+            "--",
+            lw=2.0,
+            label=r"$\frac{(\gamma_{\max}\tau)^2}{5\times 10^4}$",
         )
+        a.set_xscale("log")
+        a.set_yscale("log")
+        # a.grid(True, which="both", alpha=0.30)
+        a.legend(frameon=False)
+        place_labels(a, r"$\gamma_{\max}\tau$", r"$1-F$")
+        panel(a, "(c)")
 
-    # (a) T-scan
-    a = ax[0]
-    a.plot(T_list, IF_Tscan, "-", lw=1.6)
-    a.set(xlabel=r"$T/\tau$", ylabel=r"$1-F$")
-    a.set_yscale("log")
-    a.grid(True, which="both", alpha=0.30)
+        fig.subplots_adjust(left=0.14, right=0.98, top=0.98, bottom=0.10, hspace=hspace)
 
-    # (b) T_opt vs gamma
-    a = ax[1]
-    a.plot(x0, Topt0, "-", lw=2.0, label=r"$T(\gamma_{\max})/\tau$")
-    a.plot(x0, 9 / np.sqrt(x0), "--", lw=2.0, label=r"$9/\sqrt{\gamma_{\max}\tau}$")
-    a.set(xlabel=r"$\gamma_{\max}\tau$", ylabel=r"$T/\tau$")
-    a.set_xscale("log")
-    a.set_yscale("log")
-    a.grid(True, which="both", alpha=0.30)
-    a.legend(frameon=False, fontsize=9)
-
-    # (c) IF_opt vs gamma
-    a = ax[2]
-    a.plot(x0, 1.0 - Fopt0, "-", lw=2.0, label=r"$1-F$")
-    a.plot(x0, x0**2 / 50000, "--", lw=2.0, label=r"$(\gamma_{\max}\tau)^2/50000$")
-    a.set(xlabel=r"$\gamma_{\max}\tau$", ylabel=r"$1-F$")
-    a.set_xscale("log")
-    a.set_yscale("log")
-    a.grid(True, which="both", alpha=0.30)
-    a.legend(frameon=False, fontsize=9)
-
-    fig.tight_layout()
-    if save:
-        fig.savefig(save, dpi=dpi, bbox_inches="tight")
-    plt.show()
+        if save:
+            fig.savefig(save, dpi=dpi, bbox_inches="tight")
+        plt.show()
 
 
 # ==================================================================
@@ -964,7 +1006,7 @@ def CZMK_Scan_T(
     dt_max=0.01,
     force_recompute=False,
     cache_file="czmk_opt_from_stirap.npz",
-    filename="czmk_app.pdf",
+    filename="fig_czmk_app.pdf",
     show=True,
 ):
     """
@@ -1024,23 +1066,33 @@ def CZMK_Scan_T(
     y = 1.0 - F_arr
 
     # ---------- plot ----------
-    set_plot_style()
-    plt.figure(figsize=(3.5, 3))
-    plt.plot(x[:940], y[:940], "-", label="sech-shape")
-    plt.plot(x[:940], y_ref[:940], "--", label=r"$e^{-\gamma T}$")
-    plt.xlabel(r"$T/\tau$")
-    plt.ylabel(r"$1 - F$")
-    plt.xscale("log")
-    plt.yscale("log")
-    plt.legend()
-    plt.tight_layout()
+    with plt.rc_context():
+        set_plot_style()
+        plt.rcParams["axes.grid"] = False
 
-    if filename:
-        plt.savefig(filename, dpi=600, bbox_inches="tight")
-    if show:
-        plt.show()
-    else:
-        plt.close()
+        fig, ax = plt.subplots(figsize=(4.3, 3))
+
+        ax.plot(x[:940], y[:940], "-", label="sech-shape")
+        ax.plot(x[:940], y_ref[:940], "--", label=r"$e^{-\gamma T}$")
+
+        ax.set_xlabel(r"$T/\tau$")
+        ax.set_ylabel(r"$1 - F$")
+        ax.xaxis.set_label_coords(0.5, -0.10)
+        ax.yaxis.set_label_coords(-0.12, 0.5)
+
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+
+        ax.legend()
+
+        plt.tight_layout()
+
+        if filename:
+            fig.savefig(filename, dpi=600, bbox_inches="tight")
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
 
 
 def fig_paper_QST_and_IF_vs_T(
@@ -1055,22 +1107,21 @@ def fig_paper_QST_and_IF_vs_T(
     figsize=(7.2, 3.0),
     save=None,
     dpi=600,
+    hspace=0.12,
 ):
-    """Two-panel figure: (a) dynamics DDE vs WW; (b) infidelity vs duration with inline labels + WW scatter legend."""
+    """Two-panel figure: (a) dynamics DDE vs WW; (b) infidelity vs duration."""
 
     # ----------------- helpers -----------------
-    def _panel_label(ax, s):
-        ax.text(
-            -0.15,
-            1.05,
-            s,
-            transform=ax.transAxes,
-            va="top",
-            ha="left",
-            clip_on=False,
-        )
+    def panel(a, lab, xy=(-0.18, 1.02), fs=16):
+        a.text(*xy, lab, transform=a.transAxes, ha="left", va="bottom", fontsize=fs)
 
-    def _annot(ax, txt, x, y, xt, yt, ha="left", va="top"):
+    def place_labels(a, xlabel, ylabel, x=(-0.0, -0.12), y=(-0.12, 0.5)):
+        a.set_xlabel(xlabel)
+        a.set_ylabel(ylabel)
+        a.xaxis.set_label_coords(0.5, x[1])
+        a.yaxis.set_label_coords(y[0], y[1])
+
+    def annot(ax, txt, x, y, xt, yt, ha="left", va="top"):
         ax.annotate(
             txt,
             xy=(x, y),
@@ -1081,8 +1132,7 @@ def fig_paper_QST_and_IF_vs_T(
             va=va,
         )
 
-    # (a) dynamics
-
+    # ===================== (a) dynamics =====================
     t_max = T_dyn * tau
     gamma1 = lambda t: 0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (t - 0.5 * t_max)))
     gamma2 = (
@@ -1112,8 +1162,7 @@ def fig_paper_QST_and_IF_vs_T(
     )
     t_WW, pop_WW = ww.evolve(t_max, n_steps=1001)
 
-    # (b) IF vs T
-
+    # ===================== (b) IF vs T =====================
     swap = np.load(data0)
     stirap = np.load(data1)
     ww_opt = np.load(ww_data)
@@ -1123,100 +1172,100 @@ def fig_paper_QST_and_IF_vs_T(
     T_ww, D_ww = ww_opt["T"], ww_opt["Delta"]
     IF_ww = ww_opt["IF"].reshape(len(T_ww), len(D_ww))
 
-    # plot
-
-    set_plot_style()
-    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=figsize, constrained_layout=True)
-    _panel_label(ax0, "(a)")
-    _panel_label(ax1, "(b)")
-
-    # ---- (a) ----
-    ax0.plot(t_list / tau, p_dde[:, 0], "k", label=r"DDE: $|c_1|^2$")
-    ax0.plot(t_list / tau, p_dde[:, 1], "k", alpha=0.55, label=r"DDE: $|c_2|^2$")
-    ax0.plot(
-        t_WW / tau, pop_WW[:, 0], ls="--", color="lightskyblue", label=r"WW: $|c_1|^2$"
-    )
-    ax0.plot(
-        t_WW / tau,
-        pop_WW[:, 1],
-        ls="--",
-        color="lightskyblue",
-        alpha=0.65,
-        label=r"WW: $|c_2|^2$",
-    )
-    ax0.set(
-        xlabel=r"$t/\tau$", ylabel="Population", xlim=(0, T_dyn), ylim=(-0.02, 1.02)
-    )
-    ax0.legend(frameon=False, loc="best")
-
-    # ---- (b) ----
     cut_swap = min(2000, len(T_swap))
     cut_stirap = min(940, len(Td))
 
-    ax1.plot(T_swap[:cut_swap], IF_swap[:cut_swap], "-", color="#4c72b0", lw=2.0)
-    ax1.plot(Td[:cut_stirap], IF_stirap[:cut_stirap], "-", color="#dd8452", lw=2.0)
+    # ===================== plot =====================
+    with plt.rc_context():
+        set_plot_style()
+        plt.rcParams["axes.grid"] = False
 
-    ax1.plot(
-        Td[:cut_stirap],
-        np.exp(-gamma_list[:cut_stirap] * (Td[:cut_stirap] - 1)),
-        "--",
-        color="#0D6653B8",
-        lw=1.2,
-    )
+        fig, ax = plt.subplots(2, 1, figsize=figsize, gridspec_kw=dict(hspace=hspace))
+        ax0, ax1 = ax
 
-    markers = ["O", "D", "^"]
-    colors = ["#8172b3", "#937860", "#ccb974"]
-    colors_ww = ["#587281", "#B8D8D8", "#F4A261"]
-
-    markers = ["o", "D", "^"]
-    sizes = [55, 40, 70]
-    edge_widths = [0.8, 0.8, 1.0]
-
-    for j, (col, marker, s, ew) in enumerate(zip(colors, markers, sizes, edge_widths)):
-        ax1.scatter(
-            T_ww,
-            IF_ww[:, j],
-            s=s,
-            linewidths=ew,
-            color=col,
-            edgecolor="white",
-            marker=marker,
-            label=rf"$\Delta/\omega_\mathrm{{FSR}}={D_ww[j]:g}$",
-            zorder=5,
+        # ---- (a) ----
+        ax0.plot(t_list / tau, p_dde[:, 0], "k", lw=2.0, label=r"DDE: $|c_1|^2$")
+        ax0.plot(
+            t_list / tau, p_dde[:, 1], "k", lw=2.0, alpha=0.55, label=r"DDE: $|c_2|^2$"
+        )
+        ax0.plot(t_WW / tau, pop_WW[:, 0], ls="--", lw=2.0, label=r"WW: $|c_1|^2$")
+        ax0.plot(
+            t_WW / tau,
+            pop_WW[:, 1],
+            ls="--",
+            lw=2.0,
+            alpha=0.65,
+            label=r"WW: $|c_2|^2$",
         )
 
-    i_swap, i_sti = 870, 518
-    _annot(
-        ax1,
-        "SWAP",
-        T_swap[i_swap],
-        IF_swap[i_swap],
-        T_swap[i_swap] * 1.2,
-        IF_swap[i_swap] * 0.05,
-        ha="left",
-        va="top",
-    )
-    _annot(
-        ax1,
-        "STIRAP",
-        Td[i_sti],
-        IF_stirap[i_sti],
-        Td[i_sti] * 0.7,
-        IF_stirap[i_sti] * 2.5,
-        ha="right",
-        va="top",
-    )
+        ax0.set(xlim=(0, T_dyn), ylim=(-0.02, 1.02))
+        ax0.legend(frameon=False, loc="best")
+        place_labels(ax0, r"$t/\tau$", "Population")
+        panel(ax0, "(a)")
 
-    ax1.set(xlabel=r"$T/\tau$", ylabel=r"$1-F$")
-    ax1.set_xscale("log")
-    ax1.set_yscale("log")
-    ax1.set_ylim(1e-10, 1)
-    # ax1.set_xlim(1.01, None)
-    ax1.legend(
-        frameon=False,
-        loc=(0.05, 0.02),
-    )
+        # ---- (b) ----
+        ax1.plot(T_swap[:cut_swap], IF_swap[:cut_swap], "-", lw=2.0)
+        ax1.plot(Td[:cut_stirap], IF_stirap[:cut_stirap], "-", lw=2.0)
+        ax1.plot(
+            Td[:cut_stirap],
+            np.exp(-gamma_list[:cut_stirap] * (Td[:cut_stirap] - 1)),
+            "--",
+            lw=1.6,
+        )
 
-    if save is not None:
-        fig.savefig(save, dpi=dpi, bbox_inches="tight")
-    plt.show()
+        markers = ["o", "D", "^"]
+        sizes = [55, 40, 70]
+        edge_widths = [0.8, 0.8, 1.0]
+        colors = ["#8172b3", "#937860", "#ccb974"]  # keep your palette
+
+        for j, (col, marker, s, ew) in enumerate(
+            zip(colors, markers, sizes, edge_widths)
+        ):
+            ax1.scatter(
+                T_ww,
+                IF_ww[:, j],
+                s=s,
+                linewidths=ew,
+                color=col,
+                edgecolor="white",
+                marker=marker,
+                label=rf"$\Delta/\omega_\mathrm{{FSR}}={D_ww[j]:g}$",
+                zorder=5,
+            )
+
+        i_swap, i_sti = 870, 518
+        annot(
+            ax1,
+            "SWAP",
+            T_swap[i_swap],
+            IF_swap[i_swap],
+            T_swap[i_swap] * 1.2,
+            IF_swap[i_swap] * 0.05,
+            ha="left",
+            va="top",
+        )
+        annot(
+            ax1,
+            "STIRAP",
+            Td[i_sti],
+            IF_stirap[i_sti],
+            Td[i_sti] * 0.7,
+            IF_stirap[i_sti] * 2.5,
+            ha="right",
+            va="top",
+        )
+
+        ax1.set_xscale("log")
+        ax1.set_yscale("log")
+        ax1.set_ylim(1e-10, 1)
+        ax1.legend(frameon=False, loc=(0.05, 0.02))
+
+        place_labels(ax1, r"$T/\tau$", r"$1-F$")
+        panel(ax1, "(b)")
+
+        # unified margins (like your appendix figs)
+        fig.subplots_adjust(left=0.14, right=0.98, top=0.98, bottom=0.14, hspace=hspace)
+
+        if save is not None:
+            fig.savefig(save, dpi=dpi, bbox_inches="tight")
+        plt.show()
