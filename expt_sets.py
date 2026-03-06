@@ -6,9 +6,8 @@ import scipy
 from joblib import Parallel, delayed
 from numpy.polynomial import Polynomial
 from qnetwork.dde import EmittersInWaveguideDDE
-from qnetwork.ww import EmittersInWaveguideWW
-from qnetwork.multiphoton_ww import EmittersInWaveguideMultiphotonWW, Waveguide
 from aux_funs import dde_scalar
+from aux_funs import dde_scalar_simple as dde_scalar_simple
 from scipy.interpolate import interp1d
 from scipy.optimize import minimize_scalar
 from scipy.optimize import minimize
@@ -16,94 +15,6 @@ from two_qubit_control import EmittersInWaveguideWW as WW
 from two_qubit_control import Waveguide as WG
 from scipy.integrate import trapezoid
 from qnetwork.tools import set_plot_style
-import matplotlib as mpl
-
-
-def expt_001_dynamics(
-    Delta: float = 0.0,
-    gamma: float = 0.1,
-    tau: float = 50.0,
-    n_modes: int = 50,
-    c: float = 1.0,
-    PBC: bool = False,
-    multiphoton: bool = False,
-    T: float = 100.0,
-    dt_max: float = 0.01,
-    n_steps: int = 101,
-):
-    """Compare dynamics: DDE vs WW vs TC (and add simple Rabi-period markers)."""
-
-    initial = "10"
-    setup_kind = Waveguide.Ring if PBC else Waveguide.Cable
-    tmax = T * tau
-
-    def run_once(Delta_val: float):
-        L = (2 if PBC else 1) * tau * c
-        positions = [0.0, L / 2] if PBC else [0.0, L]
-
-        WW_cls = (
-            EmittersInWaveguideMultiphotonWW if multiphoton else EmittersInWaveguideWW
-        )
-        setup_WW = WW_cls(
-            Delta=Delta_val,
-            positions=positions,
-            gamma=gamma,
-            n_modes=n_modes,
-            L=L,
-            setup=setup_kind,
-        )
-        t_WW, pop_WW = setup_WW.evolve(tmax, n_steps=n_steps)
-
-        delta = math.modf(Delta_val)[0]
-        phi = delta * setup_WW.FSR * tau
-        setup_dde = EmittersInWaveguideDDE(
-            phi=phi, N=2, gamma=gamma, U=-1, tau=tau, dt_max=dt_max
-        )
-        setup_dde.evolve(tmax)
-        t_DDE, pop_DDE = setup_dde.n_photons(initial)
-
-        t_TC, pop_TC = setup_dde.evolve_TC(tmax, initial)
-        return t_WW, pop_WW, t_DDE, pop_DDE, t_TC, pop_TC
-
-    t_WW, pop_WW, t_DDE, pop_DDE, t_TC, pop_TC = run_once(Delta)
-
-    fig, ax = plt.subplots(figsize=(9, 5))
-    ax.set_title(rf"Dynamics ($\Delta={int(Delta)}*FSR$)")
-
-    # WW + DDE
-    ax.plot(t_WW / tau, pop_WW[:, 0], color="#0a4570", label=r"$Q_1$: WW")
-    ax.plot(t_WW / tau, pop_WW[:, 1], color="#af1a2e", label=r"$Q_2$: WW")
-    ax.plot(t_DDE / tau, pop_DDE[:, 0], "--", color="#055805", label=r"$Q_1$: DDE")
-    ax.plot(t_DDE / tau, pop_DDE[:, 1], "--", color="#055805", label=r"$Q_2$: DDE")
-
-    # TC markers (two qubits)
-    tc_style = [
-        dict(markerfacecolor="#3c91ce", markeredgecolor="#0a4570"),
-        dict(markerfacecolor="#e02e46", markeredgecolor="#af1a2e"),
-    ]
-    for j in (0, 1):
-        ax.plot(
-            t_TC / tau,
-            pop_TC[:, j],
-            linestyle="none",
-            marker="s",
-            markevery=20,
-            markeredgewidth=2,
-            **tc_style[j],
-        )
-
-    # Rabi period lines
-    g = np.sqrt(gamma / 2)
-    Omega = np.sqrt(2) * g
-    T_rabi = np.pi / Omega
-    for k in (1, 2, 3):
-        ax.axvline(k * T_rabi, linestyle="--", color="black")
-
-    ax.set_xlabel(r"$t/\tau$")
-    ax.set_ylabel(r"$\langle \sigma^\dagger \sigma \rangle$")
-    ax.legend()
-    fig.tight_layout()
-    plt.show()
 
 
 # ------------------------------------------------------------------------------------
@@ -320,14 +231,14 @@ def swap_appendix_graph(
             t_list / tau,
             "-",
             lw=2.0,
-            label=r"$T_{\mathrm{opt}}/\tau$",
+            label=r"$T(\gamma_0)/\tau$",
         )
         a.plot(gamma_list * tau, T_list / tau, "--", lw=2.0, label=r"$\pi/\Omega$")
         a.set_xscale("log")
         a.set_yscale("log")
         # a.grid(True, which="both", alpha=0.30)
         a.legend(frameon=False)
-        place_labels(a, r"$\gamma_{\max}\tau$", r"$T/\tau$")
+        place_labels(a, r"$\gamma_0\tau$", r"$T/\tau$")
         panel(a, "(b)")
 
         # ========== (c) infidelity ==========
@@ -338,13 +249,13 @@ def swap_appendix_graph(
             1.5 * (gamma_list * tau),
             "--",
             lw=2.0,
-            label=r"$\frac{3\gamma_{\max}\tau}{2}$",
+            label=r"$\frac{3\gamma_0\tau}{2}$",
         )
         a.set_xscale("log")
         a.set_yscale("log")
         # a.grid(True, which="both", alpha=0.30)
         a.legend(frameon=False)
-        place_labels(a, r"$\gamma_{\max}\tau$", r"$1-F$")
+        place_labels(a, r"$\gamma_0\tau$", r"$1-F$")
         panel(a, "(c)")
 
         fig.subplots_adjust(left=0.14, right=0.98, top=0.98, bottom=0.10, hspace=hspace)
@@ -389,54 +300,6 @@ def Fidelity(gamma, tau, phi, T, dt_max, pulse_delay):
         dt_max=dt_max,
     )
     F = np.abs(c[-1, 1]) ** 2
-    return F
-
-
-def expt_004_stirap_T_scan(
-    gamma,
-    T_list,
-    phi=0.0,
-    tau=1.0,
-    dt_max=0.01,
-    n_jobs=-1,
-    pulse_delay=True,
-):
-    gamma = gamma
-    T_list = np.asarray(T_list, float)
-
-    results = Parallel(n_jobs=n_jobs, backend="loky", prefer="processes")(
-        delayed(Fidelity)(gamma, tau, phi, T, dt_max, pulse_delay) for T in T_list
-    )
-    F = np.array(results)
-
-    T_example = 10
-    gamma1d, gamma2d = gamma_pulse_delay(gamma, T_example, tau)
-
-    tg = np.linspace(0.0, T_example * tau, 800)
-    g1dv = np.array([gamma1d(x) for x in tg])
-    g2dv = np.array([gamma2d(x) for x in tg])
-
-    fig, (axL, axR) = plt.subplots(1, 2, figsize=(12, 4))
-    axL.plot(tg / tau, np.sqrt(g1dv / (2.0 * tau)) / np.pi, "--", label=r"$g_1$ ")
-    axL.plot(tg / tau, np.sqrt(g2dv / (2.0 * tau)) / np.pi, "--", label=r"$g_2$")
-
-    axL.axvline(1.0, color="black", linestyle="--", label=r"$\tau$")
-    axL.axvline(T_example - 1.0, color="gray", linestyle="--", label=r"$T-\tau$")
-    axL.set_xlabel(r"$t/\tau$")
-    axL.set_ylabel(r"$g(t)$")
-    axL.set_title(
-        f"pulses (g_max/FSR={np.sqrt(gamma / 2) / np.pi:g}, T={T_example:g}τ)"
-    )
-    axL.legend()
-    gm = np.sqrt(gamma / (2 * np.pi**2))
-    axR.plot(T_list, 1 - F, label=f"g_max/FSR={gm:g}")
-    axR.set_xlabel("T/tau")
-    axR.set_ylabel("1 - F")
-    axR.set_yscale("log")
-    axR.legend()
-
-    fig.tight_layout()
-    plt.show()
     return F
 
 
@@ -551,7 +414,6 @@ def stirap_appendix_graph(
     dt_max: float = 0.01,
     pulse_delay: bool = True,
     n_jobs: int = -1,
-    cache_file: str = "expt_008_cache11.npz",
     cache_file_nodelay: str = "expt_008_cache11_nodelay.npz",
     save: str = "fig_stirap_app.pdf",
     dpi: int = 600,
@@ -577,6 +439,15 @@ def stirap_appendix_graph(
     )
     IF_Tscan = 1.0 - F_Tscan
     x0, Topt0, Fopt0 = load_cache(cache_file_nodelay)
+
+    # CZKM
+    data = np.load("czkm_app.npz")
+    T_arr = data["T"]
+    gamma_arr = data["gamma"]
+    F_arr = data["F"]
+    x = T_arr / tau
+    y_ref = np.exp(-gamma_arr * (x - 1))
+    y_sec = np.exp((-gamma_arr * (x - 1)) / 2)
 
     # ---------- plot ----------
     with plt.rc_context():
@@ -606,35 +477,56 @@ def stirap_appendix_graph(
         a.plot(gamma * T_list, IF_Tscan, "-", lw=2.0)
         a.set_yscale("log")
         # a.grid(True, which="both", alpha=0.30)
-        place_labels(a, r"$\gamma_{\max}T$", r"$1-F$")
+        place_labels(a, r"$\gamma_0T$", r"$1-F$")
         panel(a, "(a)")
 
         # ========== (b) ==========
         a = ax[1]
-        a.plot(x0, Topt0, "-", lw=2.0, label=r"$T(\gamma_{\max})/\tau$")
-        a.plot(x0, 9 / np.sqrt(x0), "--", lw=2.0, label=r"$9/\sqrt{\gamma_{\max}\tau}$")
-        a.set_xscale("log")
-        a.set_yscale("log")
-        # a.grid(True, which="both", alpha=0.30)
-        a.legend(frameon=False)
-        place_labels(a, r"$\gamma_{\max}\tau$", r"$T/\tau$")
-        panel(a, "(b)")
-
-        # ========== (c) ==========
-        a = ax[2]
-        a.plot(x0, 1.0 - Fopt0, "-", lw=2.0, label=r"$1-F$")
+        a.plot(x0[:940], Topt0[:940], "-", lw=2.0, label=r"$T(\gamma_0)/\tau$")
         a.plot(
-            x0,
-            x0**2 / 50000,
+            x0[:940],
+            9 / np.sqrt(x0[:940]),
             "--",
             lw=2.0,
-            label=r"$\frac{(\gamma_{\max}\tau)^2}{5\times 10^4}$",
+            label=r"$9/\sqrt{\gamma_0\tau}$",
         )
         a.set_xscale("log")
         a.set_yscale("log")
         # a.grid(True, which="both", alpha=0.30)
         a.legend(frameon=False)
-        place_labels(a, r"$\gamma_{\max}\tau$", r"$1-F$")
+        place_labels(a, r"$\gamma_0\tau$", r"$T/\tau$")
+        panel(a, "(b)")
+
+        # ========== (c) ==========
+        a = ax[2]
+        a.plot(x0[:940], 1.0 - Fopt0[:940], "-", lw=2.0, label=r"$1-F$")
+        a.plot(gamma_arr[:940], 1.0 - F_arr[:940], "--", lw=2.0, label=r"sech-shape")
+        # a.plot(
+        #     gamma_arr[:940],
+        #     y_ref[:940],
+        #     "--",
+        #     lw=2.0,
+        #     label=r"$e^{-\gamma_0(T/\tau-1)}$",
+        # )
+        # a.plot(
+        #     gamma_arr[:940],
+        #     y_sec[:940],
+        #     "--",
+        #     lw=2.0,
+        #     label=r"$e^{-\gamma_0(T/\tau-1)/2}$",
+        # )
+        a.plot(
+            x0,
+            x0**2 / 50000,
+            "--",
+            lw=2.0,
+            label=r"$\frac{(\gamma_0\tau)^2}{5\times 10^4}$",
+        )
+        a.set_xscale("log")
+        a.set_yscale("log")
+        # a.grid(True, which="both", alpha=0.30)
+        a.legend(frameon=False)
+        place_labels(a, r"$\gamma_0\tau$", r"$1-F$")
         panel(a, "(c)")
 
         fig.subplots_adjust(left=0.14, right=0.98, top=0.98, bottom=0.10, hspace=hspace)
@@ -876,7 +768,7 @@ def plot_IF_vs_T(
     IF_ww = ww["IF"].reshape(len(T_ww), len(D_ww))
 
     # ---------- plot ----------
-    fig, ax = plt.subplots(figsize=(9, 6))
+    fig, ax = plt.subplots(figsize=(6, 3.5))
 
     # Swap
     ax.plot(T_swap, IF_swap, "-", lw=2.8, label="Swap (expt_002)")
@@ -906,9 +798,11 @@ def plot_IF_vs_T(
     plt.show()
 
 
-def QST_CZMK(gamma, T, tau, dt_max=0.01, phi=0.0, WW_sim=True, plot=True):
+def CZKM_test(
+    gamma, T, tau, dt_max=0.01, phi=0.0, WW_sim=True, plot=True, dde_solver="simple"
+):
     """
-    Smooth CZMK-like emission/absorption pulses for 2-node QST under DDE.
+    Smooth CZKM-like emission/absorption pulses for 2-node QST under DDE.
 
     gamma: overall coupling scale
     T    : dimensionless total time in units of tau (t_max = T*tau)
@@ -918,41 +812,57 @@ def QST_CZMK(gamma, T, tau, dt_max=0.01, phi=0.0, WW_sim=True, plot=True):
     t_max = T * tau
 
     # pulses
-    gamma1 = lambda t: 0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (t - 0.5 * t_max)))
+    gamma1 = (
+        lambda t: 0.5
+        * gamma
+        * (1.0 + np.tanh(0.5 * gamma * (t + 0.5 * tau - 0.5 * t_max)))
+    )
     gamma2 = (
-        lambda t: 0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (0.5 * t_max - t + tau)))
+        lambda t: 0.5
+        * gamma
+        * (1.0 + np.tanh(0.5 * gamma * (-t + 0.5 * tau + 0.5 * t_max)))
     )
 
     # --- DDE evolve ---
-    t_list, c_dde = dde_scalar(
+    if dde_solver == "simple":
+        dde = dde_scalar_simple
+    else:
+        dde = dde_scalar
+    t_list, c_dde = dde(
         t_max=t_max,
         gamma1=gamma1,
         gamma2=gamma2,
         phi=phi,
         tau=tau,
         dt_max=dt_max,
+        t_start=0,
     )
 
     # populations (DDE)
     p1_dde = np.abs(c_dde[:, 0]) ** 2
     p2_dde = np.abs(c_dde[:, 1]) ** 2
-    # sample pulses on the same grid
-    g1 = np.array([gamma1(t) for t in t_list], dtype=float)
-    g2 = np.array([gamma2(t) for t in t_list], dtype=float)
     if WW_sim:
         # --- WW evolve ---
-        c_light = 1.0
+        c = 1.0
         setup_kind = WG.Cable
-        L = tau * c_light
+        L = tau * c
         positions = [0.0, L]
 
         def g_time_mod(t):
             g1 = np.sqrt(
-                (0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (t - 0.5 * t_max))))
+                (
+                    0.5
+                    * gamma
+                    * (1.0 + np.tanh(0.5 * gamma * (t + 0.5 * tau - 0.5 * t_max)))
+                )
                 / (2 * tau)
             )
             g2 = np.sqrt(
-                (0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (0.5 * t_max - t + tau))))
+                (
+                    0.5
+                    * gamma
+                    * (1.0 + np.tanh(0.5 * gamma * (-t + 0.5 * tau + 0.5 * t_max)))
+                )
                 / (2 * tau)
             )
             return np.array(
@@ -961,26 +871,38 @@ def QST_CZMK(gamma, T, tau, dt_max=0.01, phi=0.0, WW_sim=True, plot=True):
             )
 
         ww = WW(
-            Delta=50,
+            Delta=1000,
             positions=positions,
             gamma=gamma,
-            n_modes=201,
+            n_modes=1001,
             L=L,
             setup=setup_kind,
             g_time_modulation=g_time_mod,
         )
-        t_WW, pop_WW = ww.evolve(t_max, n_steps=1001)
+        t_WW, pop_WW = ww.evolve(t_max, n_steps=int(t_max / dt_max) + 1)
     if plot:
         fig, ax = plt.subplots(1, 2, figsize=(10, 3.6))
-
+        p1_ww = interp1d(
+            t_WW,
+            pop_WW[:, 0],
+            kind="linear",
+            bounds_error=False,
+            fill_value="extrapolate",
+        )
+        p2_ww = interp1d(
+            t_WW,
+            pop_WW[:, 1],
+            kind="linear",
+            bounds_error=False,
+            fill_value="extrapolate",
+        )
         # left: pulses
-        ax[0].plot(t_list, g1, label=r"$\gamma_1(t)$")
-        ax[0].plot(t_list, g2, label=r"$\gamma_2(t)$")
+        ax[0].plot(t_list, p1_dde - p1_ww(t_list), label=r"error:q1$")
+        ax[0].plot(t_list, p2_dde - p2_ww(t_list), label=r"error:q2$")
         ax[0].set_xlabel("t")
-        ax[0].set_ylabel(r"$\gamma(t)$")
+        ax[0].set_ylabel(r"$error$")
         ax[0].legend()
-        ax[0].set_title("Pulses")
-        ax[0].set_xlim(0, t_max)
+        # ax[0].set_xlim(0, t_max)
 
         ax[1].plot(t_list, p1_dde, label=r"DDE: $|c_1|^2$")
         ax[1].plot(t_list, p2_dde, label=r"DDE: $|c_2|^2$")
@@ -991,104 +913,233 @@ def QST_CZMK(gamma, T, tau, dt_max=0.01, phi=0.0, WW_sim=True, plot=True):
         ax[1].set_ylabel("population")
         ax[1].legend()
         ax[1].set_title("Dynamics")
-        ax[1].set_xlim(0, t_max)
+        # ax[1].set_xlim(0, t_max)
 
         fig.tight_layout()
 
     F = float(np.abs(c_dde[-1, 1]) ** 2)
-    return F
+    F_ww = float(pop_WW[-1, 1]) if WW_sim else None
+    print(t_list[-1], t_WW[-1])
+    return (F, F_ww) if WW_sim else F
 
 
-def CZMK_Scan_T(
-    T_list=None,
-    gamma=0.1,
-    tau=1.0,
-    dt_max=0.01,
-    force_recompute=False,
-    cache_file="czmk_opt_from_stirap.npz",
-    filename="fig_czmk_app.pdf",
-    show=True,
+def QST_CZKM(
+    gamma, T, tau, dt_max=0.01, phi=0.0, WW_sim=True, plot=True, dde_solver="simple"
 ):
     """
-    T_list is None: use STIRAP optimal points (gamma_i, T_i)
-    else          : fixed gamma, scan T_list
+    Smooth CZKM-like emission/absorption pulses for 2-node QST under DDE.
+
+    gamma: overall coupling scale
+    T    : dimensionless total time in units of tau (t_max = T*tau)
+    tau  : delay time
     """
 
-    def _load_or_compute(cache_file, compute_fn):
-        if (not os.path.exists(cache_file)) or force_recompute:
-            data = compute_fn()
-            np.savez(cache_file, **data)
-        return np.load(cache_file)
+    t_max = T * tau
 
-    if T_list is None:
-        stirap = np.load("expt_008_cache11_nodelay.npz")
-        T_arr = np.asarray(stirap["T_opt"], float)
-        gamma_arr = np.asarray(stirap["gamma"], float)
+    # pulses
+    gamma1 = (
+        lambda t: 0.5
+        * gamma
+        * (1.0 + np.tanh(0.5 * gamma * (t + 0.5 * tau - 0.5 * t_max)))
+    )
+    gamma2 = (
+        lambda t: 0.5
+        * gamma
+        * (1.0 + np.tanh(0.5 * gamma * (-t + 0.5 * tau + 0.5 * t_max)))
+    )
 
-        def compute():
-            F = np.array(
-                [
-                    QST_CZMK(
-                        g, T, tau, dt_max=dt_max, phi=0.0, WW_sim=False, plot=False
-                    )
-                    for g, T in zip(gamma_arr, T_arr)
-                ]
-            )
-            return dict(T=T_arr, gamma=gamma_arr, F=F)
-
-        data = _load_or_compute(cache_file, compute)
-        T_arr = data["T"]
-        gamma_arr = data["gamma"]
-        F_arr = data["F"]
-        x = T_arr / tau
-        y_ref = np.exp(-gamma_arr * (x - 1))
+    # --- DDE evolve ---
+    if dde_solver == "simple":
+        dde = dde_scalar_simple
     else:
-        T_arr = np.asarray(T_list, float)
-        cache_file = f"czmk_scan_gamma_{gamma:.3f}.npz"
+        dde = dde_scalar
+    t_list, c_dde = dde(
+        t_max=t_max,
+        gamma1=gamma1,
+        gamma2=gamma2,
+        phi=phi,
+        tau=tau,
+        dt_max=dt_max,
+        t_start=0,
+    )
 
-        def compute():
-            F = np.array(
-                [
-                    QST_CZMK(
-                        gamma, T, tau, dt_max=dt_max, phi=0.0, WW_sim=False, plot=False
-                    )
-                    for T in T_arr
-                ]
+    # populations (DDE)
+    p1_dde = np.abs(c_dde[:, 0]) ** 2
+    p2_dde = np.abs(c_dde[:, 1]) ** 2
+    # sample pulses on the same grid
+    g1 = np.array([gamma1(t) for t in t_list], dtype=float)
+    g2 = np.array([gamma2(t) for t in t_list], dtype=float)
+    if WW_sim:
+        # --- WW evolve ---
+        c = 1.0
+        setup_kind = WG.Cable
+        L = tau * c
+        positions = [0.0, L]
+
+        def g_time_mod(t):
+            g1 = np.sqrt(
+                (
+                    0.5
+                    * gamma
+                    * (1.0 + np.tanh(0.5 * gamma * (t + 0.5 * tau - 0.5 * t_max)))
+                )
+                / (2 * tau)
             )
-            return dict(T=T_arr, gamma=gamma, F=F)
+            g2 = np.sqrt(
+                (
+                    0.5
+                    * gamma
+                    * (1.0 + np.tanh(0.5 * gamma * (-t + 0.5 * tau + 0.5 * t_max)))
+                )
+                / (2 * tau)
+            )
+            return np.array(
+                [[g1 / np.sqrt(gamma / (2 * tau))], [g2 / np.sqrt(gamma / (2 * tau))]],
+                dtype=float,
+            )
 
-        data = _load_or_compute(cache_file, compute)
+        ww = WW(
+            Delta=1000,
+            positions=positions,
+            gamma=gamma,
+            n_modes=1001,
+            L=L,
+            setup=setup_kind,
+            g_time_modulation=g_time_mod,
+        )
+        t_WW, pop_WW = ww.evolve(t_max, n_steps=2001)
+    if plot:
+        fig, ax = plt.subplots(1, 2, figsize=(10, 3.6))
+
+        # left: pulses
+        ax[0].plot(t_list, g1, label=r"$\gamma_1(t)$")
+        ax[0].plot(t_list, g2, label=r"$\gamma_2(t)$")
+        ax[0].set_xlabel("t")
+        ax[0].set_ylabel(r"$\gamma(t)$")
+        ax[0].legend()
+        ax[0].set_title("Pulses")
+        # ax[0].set_xlim(0, t_max)
+
+        ax[1].plot(t_list, p1_dde, label=r"DDE: $|c_1|^2$")
+        ax[1].plot(t_list, p2_dde, label=r"DDE: $|c_2|^2$")
+        if WW_sim:
+            ax[1].plot(t_WW, pop_WW[:, 0], "--", label=r"WW: $|c_1|^2$")
+            ax[1].plot(t_WW, pop_WW[:, 1], "--", label=r"WW: $|c_2|^2$")
+        ax[1].set_xlabel("t")
+        ax[1].set_ylabel("population")
+        ax[1].legend()
+        ax[1].set_title("Dynamics")
+        # ax[1].set_xlim(0, t_max)
+
+        fig.tight_layout()
+
+    F = float(np.abs(c_dde[-1, 1]) ** 2)
+    F_ww = float(pop_WW[-1, 1]) if WW_sim else None
+    return (F, F_ww) if WW_sim else F
+
+
+def CZKM_app(
+    gamma_list,
+    T_list,
+    tau=1.0,
+    dt_max=0.01,
+    cache_file="czkm_app.npz",
+    overwrite=False,
+    n_jobs=-1,
+    backend="loky",
+    filename="fig_czkm_app.pdf",
+    show=True,
+    dde_solver="simple",
+):
+    """
+    Compute CZKM fidelity on paired (gamma_i, T_i).
+
+    If cache exists and force_recompute=False -> load
+    Else -> compute (parallel) and overwrite cache
+    """
+    if np.isscalar(gamma_list):
+        gamma_list = np.ones(len(T_list)) * float(gamma_list)
+    if np.isscalar(T_list):
+        T_list = np.ones(len(T_list)) * float(T_list)
+
+    gamma_arr = np.asarray(gamma_list, float).ravel()
+    T_arr = np.asarray(T_list, float).ravel()
+
+    if gamma_arr.shape != T_arr.shape:
+        raise ValueError(
+            f"gamma_list and T_list must match: {gamma_arr.shape} vs {T_arr.shape}"
+        )
+
+    need_compute = overwrite or (not os.path.exists(cache_file))
+
+    if not need_compute:
+        print(f"[CZKM] Loading cached data from {cache_file}")
+        data = np.load(cache_file)
+        gamma_arr = data["gamma"]
         T_arr = data["T"]
         F_arr = data["F"]
-        x = T_arr / tau
-        y_ref = np.exp(-gamma_arr * (x - 1))
+    else:
+        if overwrite and os.path.exists(cache_file):
+            print("[CZKM] Overwriting cache.")
 
+        else:
+            print("[CZKM] Computing fidelity (parallel)...")
+
+        def rub_one(g, T):
+            return QST_CZKM(
+                g,
+                T,
+                tau,
+                dt_max=dt_max,
+                phi=0.0,
+                WW_sim=True,
+                plot=False,
+                dde_solver=dde_solver,
+            )
+
+        F_list = Parallel(n_jobs=n_jobs, backend=backend, prefer="processes")(
+            delayed(rub_one)(g, T) for g, T in zip(gamma_arr, T_arr)
+        )
+        F_arr = np.asarray(F_list, dtype=float)
+
+        np.savez(cache_file, gamma=gamma_arr, T=T_arr, F=F_arr)
+        print(f"[CZKM] Saved to {cache_file}")
+
+    x = T_arr / float(tau)
+    x_gamma = gamma_arr * tau
     y = 1.0 - F_arr
+    y_ref = np.exp(-gamma_arr * (x - 1.0))
+    t_theory = np.exp(-gamma_arr * (x - 1.0) / 2)
 
-    # ---------- plot ----------
+    n = min(940, x.size)
+
+    # Plot
+    # Plot
     with plt.rc_context():
         set_plot_style()
         plt.rcParams["axes.grid"] = False
 
         fig, ax = plt.subplots(figsize=(4.3, 3))
 
-        ax.plot(x[:940], y[:940], "-", label="sech-shape")
-        ax.plot(x[:940], y_ref[:940], "--", label=r"$e^{-\gamma T}$")
+        ax.plot(x_gamma[:n], y[:n], "-", label="sech-shape")
+        ax.plot(x_gamma[:n], y_ref[:n], "--", label=r"$e^{-\gamma (T-\tau)}$")
+        ax.plot(x_gamma[:n], t_theory[:n], "--", label=r"$e^{-\gamma (T-\tau)/2}$")
 
-        ax.set_xlabel(r"$T/\tau$")
+        ax.set_xlabel(r"$\gamma_0\tau$")
         ax.set_ylabel(r"$1 - F$")
-        ax.xaxis.set_label_coords(0.5, -0.10)
-        ax.yaxis.set_label_coords(-0.12, 0.5)
+
+        ax.xaxis.set_label_coords(0.50, -0.12)
+        ax.yaxis.set_label_coords(-0.13, 0.50)
 
         ax.set_xscale("log")
         ax.set_yscale("log")
-
         ax.legend()
 
         plt.tight_layout()
 
         if filename:
             fig.savefig(filename, dpi=600, bbox_inches="tight")
+
         if show:
             plt.show()
         else:
@@ -1184,18 +1235,16 @@ def fig_paper_QST_and_IF_vs_T(
         ax0, ax1 = ax
 
         # ---- (a) ----
-        ax0.plot(t_list / tau, p_dde[:, 0], "k", lw=2.0, label=r"DDE: $|c_1|^2$")
-        ax0.plot(
-            t_list / tau, p_dde[:, 1], "k", lw=2.0, alpha=0.55, label=r"DDE: $|c_2|^2$"
-        )
-        ax0.plot(t_WW / tau, pop_WW[:, 0], ls="--", lw=2.0, label=r"WW: $|c_1|^2$")
+        ax0.plot(t_list / tau, p_dde[:, 0], "k", lw=2.0, label=r"DDE: $Q1$")
+        ax0.plot(t_list / tau, p_dde[:, 1], "k", lw=2.0, alpha=0.55, label=r"DDE: $Q2$")
+        ax0.plot(t_WW / tau, pop_WW[:, 0], ls="--", lw=2.0, label=r"WW: $Q1$")
         ax0.plot(
             t_WW / tau,
             pop_WW[:, 1],
             ls="--",
             lw=2.0,
             alpha=0.65,
-            label=r"WW: $|c_2|^2$",
+            label=r"WW: $Q2$",
         )
 
         ax0.set(xlim=(0, T_dyn), ylim=(-0.02, 1.02))
