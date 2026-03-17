@@ -264,6 +264,11 @@ def dde_scalar_simple(
 
     def add_solution(t: float | np.floating, c: np.ndarray):
         nonlocal next_index, buffer_size, t_list, c_list, interpolator
+        if next_index > 0 and np.isclose(float(t), t_list[next_index - 1]):
+            t_list[next_index - 1] = float(t)
+            c_list[next_index - 1] = c
+            return
+
         i = next_index
         L = buffer_size
 
@@ -363,6 +368,19 @@ def dde_scalar(
 
     def add_solution(t: float | np.floating, c: np.ndarray):
         nonlocal next_index, buffer_size, t_list, c_list, a_out_list, interpolator
+        if next_index > 0 and np.isclose(float(t), t_list[next_index - 1]):
+            i = next_index - 1
+            t_list[i] = float(t)
+            c_list[i] = c
+
+            a_out_past = interpolator(np.float64(t - tau))
+            gamma_now = gamma_of_t(float(t))
+            emitted = (-1j * np.sqrt(0.5 * gamma_now)) * c
+
+            a_out_list[i, 0, :] = phase * a_out_past[0, right] + emitted
+            a_out_list[i, 1, :] = phase * a_out_past[1, left] + emitted
+            return
+
         i = next_index
         L = buffer_size
 

@@ -16,6 +16,23 @@ from scipy.integrate import trapezoid
 from qnetwork.tools import set_plot_style
 
 
+PLOT_COLORS = {
+    "swap": "#1F5A99",
+    "stirap": "#1E9B92",
+    "czkm": "#C76B2A",
+    "theory": "#6D7F99",
+    "guide": "#94A3BC",
+    "q1": "#2C6FB2",
+    "q2": "#D69A2D",
+    "dde": "#4C628A",
+    "ww": "#7E8FB5",
+    "error": "#000000",
+    "scatter_a": "#5E7FC6",
+    "scatter_b": "#5DA59D",
+    "scatter_c": "#D08A56",
+}
+
+
 # ------------------------------------------------------------------------------------
 def dde_series_function(gamma, tau, eta, N, alpha=None):
     """Return the truncated DDE series solution as a callable of time."""
@@ -49,13 +66,21 @@ def dde_series_function(gamma, tau, eta, N, alpha=None):
 
 
 def compute_period_and_fidelity(Delta, gamma, tau=1, T_min=0.8, T_max=1.2):
-    """Estimate the oscillation period and peak transfer fidelity for one gamma."""
+    """Estimate the period, peak fidelity, and integrated link occupancy."""
     # phase
     FSR = np.pi / tau
     phi = math.modf(Delta)[0] * FSR * tau
     phase = np.exp(1j * phi)
     eta_b = phase
     eta_d = -phase
+
+    # p1(gamma, t)
+    def make_p1(gamma, T_max):
+        """Build the source-qubit population curve."""
+        n_terms = int(T_max / tau)
+        cb = dde_series_function(gamma, tau, eta_b, n_terms)
+        cd = dde_series_function(gamma, tau, eta_d, n_terms)
+        return lambda t: np.abs(0.5 * (cb(t) + cd(t))) ** 2
 
     # p2(gamma, t)
     def make_p2(gamma, T_max):
@@ -69,6 +94,7 @@ def compute_period_and_fidelity(Delta, gamma, tau=1, T_min=0.8, T_max=1.2):
     # analytic Omega
     Omega = np.sqrt(Delta**2 + 8 * g**2) / 2
     T = np.pi / Omega
+    p1 = make_p1(gamma, T_max * T)
     p2 = make_p2(gamma, T_max * T)
 
     # peak search
@@ -79,7 +105,13 @@ def compute_period_and_fidelity(Delta, gamma, tau=1, T_min=0.8, T_max=1.2):
         options={"xatol": 1e-9},
     )
     t_peak, F = float(res.x), float(-res.fun)
-    return g / FSR, T, t_peak, F
+
+    # Link exposure: integrate the probability weight living in the channel.
+    t_grid = np.linspace(0.0, t_peak, 4001)
+    n_loss = np.clip(1.0 - p1(t_grid) - p2(t_grid), 0.0, None)
+    N_link = float(trapezoid(n_loss, x=t_grid))
+
+    return g / FSR, T, t_peak, F, N_link
 
 
 def expt_002_swapspeed(
@@ -88,11 +120,12 @@ def expt_002_swapspeed(
     tau=1.0,
     T_min=0,
     T_max=1.9,
+    kappa=0.1,
     n_jobs=-1,
     overwrite=False,
     filename="expt_002_cache.npz",
 ):
-    """Scan SWAP speed versus gamma, with optional caching and plotting."""
+    """Scan SWAP speed versus gamma, caching only the integrated link occupancy."""
     if os.path.exists(filename) and not overwrite:
         print(f"[load] {filename}")
         data = np.load(filename)
@@ -100,6 +133,16 @@ def expt_002_swapspeed(
         T_list = data["T"]
         t_list = data["t"]
         F_list = data["F"]
+        if "N_link" in data.files:
+            N_link_list = np.asarray(data["N_link"], float)
+        elif "P_loss" in data.files:
+            N_link_list = np.asarray(data["P_loss"], float)
+        elif "P_link_loss" in data.files:
+            kappa_cache = float(data["kappa"]) if "kappa" in data.files else kappa
+            P_survival = np.clip(np.asarray(data["P_link_loss"], float), 1e-300, 1.0)
+            N_link_list = -np.log(P_survival) / kappa_cache
+        else:
+            N_link_list = np.full_like(F_list, np.nan, dtype=float)
     else:
         if gamma_list is None:
             raise ValueError(
@@ -112,7 +155,7 @@ def expt_002_swapspeed(
             delayed(compute_period_and_fidelity)(Delta, gamma, tau, T_min, T_max)
             for gamma in gamma_list
         )
-        g_list, T_list, t_list, F_list = (
+        g_list, T_list, t_list, F_list, N_link_list = (
             np.asarray(values, float) for values in zip(*results)
         )
 
@@ -122,6 +165,7 @@ def expt_002_swapspeed(
             T=T_list,
             t=t_list,
             F=F_list,
+            N_link=N_link_list,
             Delta=Delta,
             tau=tau,
             T_min=T_min,
@@ -129,13 +173,23 @@ def expt_002_swapspeed(
         )
         print(f"[save] {filename}")
 
+    P_link_loss_list = 1.0 - np.exp(-kappa * N_link_list)
+
     # ---------- plot ----------
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
     gamma_tau = 2 * g_list**2
 
     #  swap speed
-    axes[0].plot(gamma_tau, t_list / tau, "-", label="Swap speed")
-    axes[0].plot(gamma_tau, T_list / tau, "--", label=r"$\pi/\Omega$")
+    axes[0].plot(
+        gamma_tau, t_list / tau, "-", color=PLOT_COLORS["swap"], label="Swap speed"
+    )
+    axes[0].plot(
+        gamma_tau,
+        T_list / tau,
+        "--",
+        color=PLOT_COLORS["theory"],
+        label=r"$\pi/\Omega$",
+    )
     axes[0].set_xscale("log")
     axes[0].set_yscale("log")
     axes[0].set_xlabel(r"$\gamma \tau$")
@@ -144,14 +198,33 @@ def expt_002_swapspeed(
     axes[0].legend()
 
     #  infidelity
-    axes[1].plot(gamma_tau, 1 - F_list, "-", label="Infidelity")
-    axes[1].plot(gamma_tau, gamma_tau, "-", label="Infidelity")
+    axes[1].plot(
+        gamma_tau, 1 - F_list, "-", color=PLOT_COLORS["swap"], label="Infidelity"
+    )
+    axes[1].plot(
+        gamma_tau,
+        1.5 * gamma_tau,
+        "--",
+        color=PLOT_COLORS["theory"],
+        label=r"$\frac{3\gamma\tau}{2}$",
+    )
     axes[1].set_xscale("log")
     axes[1].set_yscale("log")
     axes[1].set_xlabel(r"$\gamma \tau$")
     axes[1].set_ylabel("1 − F")
     axes[1].grid(True)
     axes[1].legend()
+
+    #  link loss estimated from 1 - exp(-kappa * \int n(t) dt)
+    axes[2].plot(
+        gamma_tau, P_link_loss_list, "-", color=PLOT_COLORS["swap"], label="Link loss"
+    )
+    axes[2].set_xscale("log")
+    axes[2].set_yscale("log")
+    axes[2].set_xlabel(r"$\gamma \tau$")
+    axes[2].set_ylabel(r"$1-e^{-\kappa \int_0^{t_*} n(t)\,dt}$")
+    axes[2].grid(True)
+    axes[2].legend()
 
     fig.tight_layout()
     plt.show()
@@ -186,7 +259,7 @@ def swap_appendix_graph(
     t_DDE, pop_DDE = dde.n_photons(initial)
 
     # ---------- load cache ----------
-    cache = np.load("expt_002_cache.npz")
+    cache = np.load("swap_qst.npz")
     g_list = np.asarray(cache["g"], float)
     T_list = np.asarray(cache["T"], float)
     t_list = np.asarray(cache["t"], float)
@@ -203,9 +276,7 @@ def swap_appendix_graph(
         set_plot_style()
         plt.rcParams["axes.grid"] = False
 
-        fig, axes = plt.subplots(
-            3, 1, figsize=figsize, gridspec_kw=dict(hspace=hspace)
-        )
+        fig, axes = plt.subplots(3, 1, figsize=figsize, gridspec_kw=dict(hspace=hspace))
 
         def place_labels(axis, xlabel, ylabel, x=(-0.0, -0.2), y=(-0.12, 0.5)):
             """Apply the paper-style label placement used in appendix figures."""
@@ -222,9 +293,29 @@ def swap_appendix_graph(
 
         # ========== (a) dynamics ==========
         axis = axes[0]
-        axis.plot(t_DDE / tau, pop_DDE[:, 0], "--", lw=2.0, label=r"$Q_1$")
-        axis.plot(t_DDE / tau, pop_DDE[:, 1], "-", lw=2.0, label=r"$Q_2$")
-        axis.axvline(T_rabi / tau, ls="--", c="k", alpha=0.3, label=r"$\pi/\Omega$")
+        axis.plot(
+            t_DDE / tau,
+            pop_DDE[:, 0],
+            "--",
+            lw=2.0,
+            color=PLOT_COLORS["q1"],
+            label=r"$Q_1$",
+        )
+        axis.plot(
+            t_DDE / tau,
+            pop_DDE[:, 1],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["q2"],
+            label=r"$Q_2$",
+        )
+        axis.axvline(
+            T_rabi / tau,
+            ls="--",
+            c=PLOT_COLORS["theory"],
+            alpha=0.5,
+            label=r"$\pi/\Omega$",
+        )
         # axis.grid(True, which="both", alpha=0.30)
         axis.legend(frameon=False)
         place_labels(axis, r"$t/\tau$", r"$\langle \sigma^\dagger \sigma \rangle$")
@@ -237,9 +328,17 @@ def swap_appendix_graph(
             t_list / tau,
             "-",
             lw=2.0,
+            color=PLOT_COLORS["swap"],
             label=r"$T(\gamma_0)/\tau$",
         )
-        axis.plot(gamma_tau, T_list / tau, "--", lw=2.0, label=r"$\pi/\Omega$")
+        axis.plot(
+            gamma_tau,
+            T_list / tau,
+            "--",
+            lw=2.0,
+            color=PLOT_COLORS["theory"],
+            label=r"$\pi/\Omega$",
+        )
         axis.set_xscale("log")
         axis.set_yscale("log")
         # axis.grid(True, which="both", alpha=0.30)
@@ -249,12 +348,20 @@ def swap_appendix_graph(
 
         # ========== (c) infidelity ==========
         axis = axes[2]
-        axis.plot(gamma_tau, 1.0 - F_list, "-", lw=2.0, label=r"$1-F$")
+        axis.plot(
+            gamma_tau,
+            1.0 - F_list,
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["swap"],
+            label=r"$1-F$",
+        )
         axis.plot(
             gamma_tau,
             1.5 * gamma_tau,
             "--",
             lw=2.0,
+            color=PLOT_COLORS["theory"],
             label=r"$\frac{3\gamma_0\tau}{2}$",
         )
         axis.set_xscale("log")
@@ -291,10 +398,10 @@ def gamma_pulse_delay(gamma, T, tau=1.0):
     )
 
 
-def Fidelity(gamma, tau, phi, T, dt_max, pulse_delay):
-    """Compute the final transfer fidelity for a chosen pulse family."""
+def Fidelity(gamma, tau, phi, T, dt_max, pulse_delay, return_link=False):
+    """Compute the final STIRAP fidelity and, optionally, the link integral."""
     gamma1, gamma2 = (gamma_pulse_delay if pulse_delay else gamma_pulse)(gamma, T, tau)
-    _, c = dde_scalar(
+    t_list, c = dde_scalar(
         t_max=T * tau,
         gamma1=gamma1,
         gamma2=gamma2,
@@ -303,7 +410,12 @@ def Fidelity(gamma, tau, phi, T, dt_max, pulse_delay):
         dt_max=dt_max,
     )
     F = np.abs(c[-1, 1]) ** 2
-    return F
+    if not return_link:
+        return F
+
+    n_link = np.clip(1.0 - np.sum(np.abs(c[:, :2]) ** 2, axis=1), 0.0, None)
+    N_link = float(trapezoid(n_link, x=t_list))
+    return F, N_link
 
 
 # ------------------------------------------------------------------------------------
@@ -315,7 +427,7 @@ def stirap_optimal_Peak(
     dt_max=0.01,
     pulse_delay=True,
 ):
-    """Optimize the pulse duration that maximizes the final STIRAP fidelity."""
+    """Optimize the pulse duration and report the associated link integral."""
     if T_range is None:
         T_range = [0.5, 10.0 / np.sqrt(gamma)]
     res = minimize_scalar(
@@ -326,7 +438,16 @@ def stirap_optimal_Peak(
 
     T_opt = float(res.x)
     F_opt = float(-res.fun)
-    return T_opt, F_opt
+    _, N_link_opt = Fidelity(
+        gamma,
+        tau,
+        phi,
+        T_opt,
+        dt_max,
+        pulse_delay,
+        return_link=True,
+    )
+    return T_opt, F_opt, N_link_opt
 
 
 # ------------------------------------------------------------------------------------
@@ -337,32 +458,41 @@ def expt_008_ScanGamma_Refined(
     tau=1.0,
     dt_max=0.01,
     pulse_delay=True,
+    kappa=1.0,
     n_jobs=-1,
     plot=True,
     cache_file="expt_008_cache.npz",
     overwrite=False,
 ):
-    """Scan the optimal STIRAP duration over gamma and optionally cache the result."""
+    """Scan the optimal STIRAP duration over gamma and cache only the link integral."""
     gamma_list = np.asarray(gamma_list, float)
 
-    def _plot_008(gamma, T_opt, F_opt):
-        """Plot the optimal duration and infidelity versus gamma."""
-        fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-        ax_T, ax_F = axes
+    def _plot_008(gamma, T_opt, F_opt, N_link):
+        """Plot the optimal duration, infidelity, and link loss versus gamma."""
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+        ax_T, ax_F, ax_L = axes
+        P_link_loss = 1.0 - np.exp(-kappa * N_link)
 
-        ax_T.plot(gamma, T_opt, "-")
+        ax_T.plot(gamma, T_opt, "-", color=PLOT_COLORS["stirap"])
         ax_T.set_xscale("log")
         ax_T.set_yscale("log")
         ax_T.set_xlabel(r"$\gamma$")
         ax_T.set_ylabel(r"$T^*$")
         ax_T.set_title("Optimal T")
 
-        ax_F.plot(gamma, 1.0 - F_opt, "-")
+        ax_F.plot(gamma, 1.0 - F_opt, "-", color=PLOT_COLORS["stirap"])
         ax_F.set_xscale("log")
         ax_F.set_yscale("log")
         ax_F.set_xlabel(r"$\gamma$")
         ax_F.set_ylabel(r"$1-F$")
         ax_F.set_title("Minimal infidelity")
+
+        ax_L.plot(gamma, P_link_loss, "-", color=PLOT_COLORS["stirap"])
+        ax_L.set_xscale("log")
+        ax_L.set_yscale("log")
+        ax_L.set_xlabel(r"$\gamma$")
+        ax_L.set_ylabel(r"$1-e^{-\kappa \int n(t)\,dt}$")
+        ax_L.set_title("Link loss")
 
         fig.tight_layout()
         plt.show()
@@ -373,16 +503,26 @@ def expt_008_ScanGamma_Refined(
         gamma = np.asarray(cache["gamma"], float)
         T_opt = cache["T_opt"]
         F_opt = cache["F_opt"]
+        N_link = (
+            np.asarray(cache["N_link"], float)
+            if "N_link" in cache.files
+            else (
+                -np.log(np.clip(np.asarray(cache["P_link_loss"], float), 1e-300, 1.0))
+                / float(cache["kappa"])
+                if "P_link_loss" in cache.files and "kappa" in cache.files
+                else np.full_like(F_opt, np.nan, dtype=float)
+            )
+        )
 
         if plot:
-            _plot_008(gamma, T_opt, F_opt)
+            _plot_008(gamma, T_opt, F_opt, N_link)
 
         return
 
     # ---------- compute ----------
     def run_one_gamma(g):
         """Run the one-parameter STIRAP optimization for a single gamma."""
-        T_opt, F_opt = stirap_optimal_Peak(
+        T_opt, F_opt, N_link_opt = stirap_optimal_Peak(
             gamma=g,
             T_range=T_range,
             phi=phi,
@@ -390,12 +530,12 @@ def expt_008_ScanGamma_Refined(
             dt_max=dt_max,
             pulse_delay=pulse_delay,
         )
-        return T_opt, F_opt
+        return T_opt, F_opt, N_link_opt
 
     results = Parallel(n_jobs=n_jobs, prefer="processes")(
         delayed(run_one_gamma)(g) for g in gamma_list
     )
-    T_opt, F_opt = (np.asarray(values, float) for values in zip(*results))
+    T_opt, F_opt, N_link_opt = (np.asarray(values, float) for values in zip(*results))
     # ---------- save ----------
     if cache_file:
         np.savez(
@@ -403,11 +543,12 @@ def expt_008_ScanGamma_Refined(
             gamma=gamma_list,
             T_opt=T_opt,
             F_opt=F_opt,
+            N_link=N_link_opt,
         )
         print(f"[info] saved cache: {cache_file}")
 
     if plot:
-        _plot_008(gamma_list, T_opt, F_opt)
+        _plot_008(gamma_list, T_opt, F_opt, N_link_opt)
 
 
 # ---------------------------------
@@ -419,7 +560,7 @@ def stirap_appendix_graph(
     dt_max: float = 0.01,
     pulse_delay: bool = True,
     n_jobs: int = -1,
-    cache_file_nodelay: str = "expt_008_cache11_nodelay.npz",
+    cache_file_nodelay: str = "stirap_qst.npz",
     save: str = "fig_stirap_app.pdf",
     dpi: int = 600,
     figsize=(7.2, 7.2),
@@ -458,9 +599,7 @@ def stirap_appendix_graph(
         set_plot_style()
         plt.rcParams["axes.grid"] = False
 
-        fig, axes = plt.subplots(
-            3, 1, figsize=figsize, gridspec_kw=dict(hspace=hspace)
-        )
+        fig, axes = plt.subplots(3, 1, figsize=figsize, gridspec_kw=dict(hspace=hspace))
 
         def place_labels(axis, xlabel, ylabel, x=(-0.0, -0.2), y=(-0.12, 0.5)):
             """Apply the paper-style label placement used in appendix figures."""
@@ -482,7 +621,7 @@ def stirap_appendix_graph(
 
         # ========== (a) ==========
         axis = axes[0]
-        axis.plot(gamma * T_list, IF_Tscan, "-", lw=2.0)
+        axis.plot(gamma * T_list, IF_Tscan, "-", lw=2.0, color=PLOT_COLORS["stirap"])
         axis.set_yscale("log")
         # axis.grid(True, which="both", alpha=0.30)
         place_labels(axis, r"$\gamma_0T$", r"$1-F$")
@@ -491,13 +630,19 @@ def stirap_appendix_graph(
         # ========== (b) ==========
         axis = axes[1]
         axis.plot(
-            gamma_ref[:cut], T_opt_ref[:cut], "-", lw=2.0, label=r"$T(\gamma_0)/\tau$"
+            gamma_ref[:cut],
+            T_opt_ref[:cut],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["stirap"],
+            label=r"$T(\gamma_0)/\tau$",
         )
         axis.plot(
             gamma_ref[:cut],
             9 / np.sqrt(gamma_ref[:cut]),
             "--",
             lw=2.0,
+            color=PLOT_COLORS["theory"],
             label=r"$9/\sqrt{\gamma_0\tau}$",
         )
         axis.set_xscale("log")
@@ -509,10 +654,17 @@ def stirap_appendix_graph(
 
         # ========== (c) ==========
         axis = axes[2]
-        axis.plot(gamma_ref[:cut], 1.0 - F_opt_ref[:cut], "-", lw=2.0, label=r"$1-F$")
         axis.plot(
-            gamma_czkm[:cut], 1.0 - F_czkm[:cut], "--", lw=2.0, label=r"sech-shape"
+            gamma_ref[:cut],
+            1.0 - F_opt_ref[:cut],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["stirap"],
+            label=r"$1-F$",
         )
+        # axis.plot(
+        #     gamma_czkm[:cut], 1.0 - F_czkm[:cut], "--", lw=2.0, color=PLOT_COLORS["czkm"], label=r"sech-shape"
+        # )
         # axis.plot(
         #     gamma_czkm[:cut],
         #     y_ref[:940],
@@ -532,6 +684,7 @@ def stirap_appendix_graph(
             gamma_ref**2 / 50000,
             "--",
             lw=2.0,
+            color=PLOT_COLORS["theory"],
             label=r"$\frac{(\gamma_0\tau)^2}{5\times 10^4}$",
         )
         axis.set_xscale("log")
@@ -569,7 +722,9 @@ def renormalize_WW_opimized(
     positions = [0.0, L / 2.0] if PBC else [0.0, L]
     tmax = T * tau
 
-    g1_ref, g2_ref = (gamma_pulse_delay if pulse_delay else gamma_pulse)(gamma_guess, T, tau)
+    g1_ref, g2_ref = (gamma_pulse_delay if pulse_delay else gamma_pulse)(
+        gamma_guess, T, tau
+    )
     t_dde, y_dde = dde_scalar(
         t_max=tmax, gamma1=g1_ref, gamma2=g2_ref, phi=0.0, tau=tau, dt_max=dt_max
     )
@@ -700,7 +855,7 @@ def renormalize_WW_opimized(
 # -----------------------------------------------------
 def expt_009_renormalized_WW_fidelity(
     Delta_list=(50.0, 5.0, 1.0),
-    data="expt_008_cache11_nodelay.npz",
+    data="stirap_qst.npz",
     idx_gamma=(40, 80, 100),
     n_jobs=-1,
     savefile="expt_009_renormalized_WW_fidelity.npz",
@@ -816,14 +971,20 @@ def plot_IF_vs_T(
 
 
 def CZKM_test(
-    gamma, T, tau, dt_max=0.01, phi=0.0, WW_sim=True, plot=True, dde_solver="simple"
+    gamma,
+    T,
+    tau,
+    dt_max=0.01,
+    phi=0.0,
+    WW_sim=True,
+    plot=True,
+    dde_solver="simple",
+    compare_mode="dde",
 ):
-    """
-    Smooth CZKM-like emission/absorption pulses for 2-node QST under DDE.
+    """Compare CZKM dynamics in one of three modes: DDE-vs-DDE or DDE-vs-WW.
 
-    gamma: overall coupling scale
-    T    : dimensionless total time in units of tau (t_max = T*tau)
-    tau  : delay time
+    `compare_mode` supports `"dde"`, `"scalar_ww"`, and `"simple_ww"`.
+    Returns the final fidelities of the two traces being compared.
     """
 
     t_max = T * tau
@@ -831,18 +992,32 @@ def CZKM_test(
     tanh_scale = 0.5 * gamma
     half_tau = 0.5 * tau
     half_tmax = 0.5 * t_max
+    _ = dde_solver
+    compare_mode = str(compare_mode).lower()
+    if compare_mode not in {"dde", "scalar_ww", "simple_ww"}:
+        raise ValueError(
+            "compare_mode must be one of {'dde', 'scalar_ww', 'simple_ww'}."
+        )
 
     # pulses
-    gamma1 = (
-        lambda t: pulse_scale * (1.0 + np.tanh(tanh_scale * (t + half_tau - half_tmax)))
+    gamma1 = lambda t: pulse_scale * (
+        1.0 + np.tanh(tanh_scale * (t + half_tau - half_tmax))
     )
-    gamma2 = (
-        lambda t: pulse_scale * (1.0 + np.tanh(tanh_scale * (-t + half_tau + half_tmax)))
+    gamma2 = lambda t: pulse_scale * (
+        1.0 + np.tanh(tanh_scale * (-t + half_tau + half_tmax))
     )
 
     # --- DDE evolve ---
-    dde = dde_scalar_simple if dde_solver == "simple" else dde_scalar
-    t_list, c_dde = dde(
+    t_scalar, c_scalar = dde_scalar(
+        t_max=t_max,
+        gamma1=gamma1,
+        gamma2=gamma2,
+        phi=phi,
+        tau=tau,
+        dt_max=dt_max,
+        t_start=0,
+    )
+    t_simple, c_simple = dde_scalar_simple(
         t_max=t_max,
         gamma1=gamma1,
         gamma2=gamma2,
@@ -852,11 +1027,26 @@ def CZKM_test(
         t_start=0,
     )
 
-    # populations (DDE)
-    p1_dde = np.abs(c_dde[:, 0]) ** 2
-    p2_dde = np.abs(c_dde[:, 1]) ** 2
-    if WW_sim:
-        # --- WW evolve ---
+    # populations
+    p_scalar = np.abs(c_scalar[:, :2]) ** 2
+    p_simple = np.abs(c_simple[:, :2]) ** 2
+    F_scalar = float(np.abs(c_scalar[-1, 1]) ** 2)
+    F_simple = float(np.abs(c_simple[-1, 1]) ** 2)
+
+    def prepare_interp_grid(t, y):
+        """Sort and deduplicate an interpolation grid before calling interp1d."""
+        order = np.argsort(t)
+        t_sorted = np.asarray(t, float)[order]
+        y_sorted = np.asarray(y)[order]
+        t_unique, unique_idx = np.unique(t_sorted, return_index=True)
+        return t_unique, y_sorted[unique_idx]
+
+    t_simple_itp, p_simple_itp = prepare_interp_grid(t_simple, p_simple)
+
+    if compare_mode != "dde":
+        if not WW_sim:
+            raise ValueError("WW_sim must be True when compare_mode uses WW.")
+
         L = tau
         positions = [0.0, L]
         norm = np.sqrt(gamma)
@@ -877,52 +1067,116 @@ def CZKM_test(
             setup=WG.Cable,
             g_time_modulation=g_time_mod,
         )
-        t_WW, pop_WW = ww.evolve(t_max, n_steps=int(t_max / dt_max) + 1)
+        t_ww, pop_ww = ww.evolve(t_max, n_steps=int(t_max / dt_max) + 1)
+        p_ww = pop_ww[:, :2]
+        F_ww = float(pop_ww[-1, 1])
+        t_ww_itp, p_ww_itp = prepare_interp_grid(t_ww, p_ww)
+
+    if compare_mode == "dde":
+        compare_t = t_scalar
+        compare_a = p_scalar
+        compare_b = interp1d(
+            t_simple_itp,
+            p_simple_itp,
+            kind="linear",
+            axis=0,
+            bounds_error=False,
+            fill_value="extrapolate",
+        )(compare_t)
+        label_a = "dde_scalar"
+        label_b = "dde_simple"
+        F_a, F_b = F_scalar, F_simple
+    elif compare_mode == "scalar_ww":
+        compare_t = t_scalar
+        compare_a = p_scalar
+        compare_b = interp1d(
+            t_ww_itp,
+            p_ww_itp,
+            kind="linear",
+            axis=0,
+            bounds_error=False,
+            fill_value="extrapolate",
+        )(compare_t)
+        label_a = "dde_scalar"
+        label_b = "WW"
+        F_a, F_b = F_scalar, F_ww
+    else:
+        compare_t = t_simple
+        compare_a = p_simple
+        compare_b = interp1d(
+            t_ww_itp,
+            p_ww_itp,
+            kind="linear",
+            axis=0,
+            bounds_error=False,
+            fill_value="extrapolate",
+        )(compare_t)
+        label_a = "dde_simple"
+        label_b = "WW"
+        F_a, F_b = F_simple, F_ww
+
+    p_diff = compare_a - compare_b
+
     if plot:
         fig, ax = plt.subplots(1, 2, figsize=(10, 3.6))
-        p1_ww = interp1d(
-            t_WW,
-            pop_WW[:, 0],
-            kind="linear",
-            bounds_error=False,
-            fill_value="extrapolate",
+
+        # left: direct difference
+        ax[0].plot(
+            compare_t, p_diff[:, 0], color=PLOT_COLORS["q1"], label=r"$\Delta |c_1|^2$"
         )
-        p2_ww = interp1d(
-            t_WW,
-            pop_WW[:, 1],
-            kind="linear",
-            bounds_error=False,
-            fill_value="extrapolate",
+        ax[0].plot(
+            compare_t, p_diff[:, 1], color=PLOT_COLORS["q2"], label=r"$\Delta |c_2|^2$"
         )
-        # left: pulses
-        ax[0].plot(t_list, p1_dde - p1_ww(t_list), label=r"error:q1$")
-        ax[0].plot(t_list, p2_dde - p2_ww(t_list), label=r"error:q2$")
         ax[0].set_xlabel("t")
         ax[0].set_ylabel(r"$error$")
         ax[0].legend()
-        # ax[0].set_xlim(0, t_max)
 
-        ax[1].plot(t_list, p1_dde, label=r"DDE: $|c_1|^2$")
-        ax[1].plot(t_list, p2_dde, label=r"DDE: $|c_2|^2$")
-        if WW_sim:
-            ax[1].plot(t_WW, pop_WW[:, 0], "--", label=r"WW: $|c_1|^2$")
-            ax[1].plot(t_WW, pop_WW[:, 1], "--", label=r"WW: $|c_2|^2$")
+        ax[1].plot(
+            compare_t,
+            compare_a[:, 0],
+            color=PLOT_COLORS["q1"],
+            label=rf"{label_a}: $|c_1|^2$",
+        )
+        ax[1].plot(
+            compare_t,
+            compare_a[:, 1],
+            color=PLOT_COLORS["q2"],
+            label=rf"{label_a}: $|c_2|^2$",
+        )
+        ax[1].plot(
+            compare_t,
+            compare_b[:, 0],
+            "--",
+            color=PLOT_COLORS["dde"],
+            label=rf"{label_b}: $|c_1|^2$",
+        )
+        ax[1].plot(
+            compare_t,
+            compare_b[:, 1],
+            "--",
+            color=PLOT_COLORS["ww"],
+            label=rf"{label_b}: $|c_2|^2$",
+        )
         ax[1].set_xlabel("t")
         ax[1].set_ylabel("population")
         ax[1].legend()
         ax[1].set_title("Dynamics")
-        # ax[1].set_xlim(0, t_max)
 
         fig.tight_layout()
 
-    F = float(np.abs(c_dde[-1, 1]) ** 2)
-    F_ww = float(pop_WW[-1, 1]) if WW_sim else None
-    print(t_list[-1], t_WW[-1])
-    return (F, F_ww) if WW_sim else F
+    return F_a, F_b
 
 
 def QST_CZKM(
-    gamma, T, tau, dt_max=0.01, phi=0.0, WW_sim=True, plot=True, dde_solver="simple"
+    gamma,
+    T,
+    tau,
+    dt_max=0.01,
+    phi=0.0,
+    WW_sim=True,
+    plot=True,
+    dde_solver="simple",
+    return_link=False,
 ):
     """
     Smooth CZKM-like emission/absorption pulses for 2-node QST under DDE.
@@ -939,11 +1193,11 @@ def QST_CZKM(
     half_tmax = 0.5 * t_max
 
     # pulses
-    gamma1 = (
-        lambda t: pulse_scale * (1.0 + np.tanh(tanh_scale * (t + half_tau - half_tmax)))
+    gamma1 = lambda t: pulse_scale * (
+        1.0 + np.tanh(tanh_scale * (t + half_tau - half_tmax))
     )
-    gamma2 = (
-        lambda t: pulse_scale * (1.0 + np.tanh(tanh_scale * (-t + half_tau + half_tmax)))
+    gamma2 = lambda t: pulse_scale * (
+        1.0 + np.tanh(tanh_scale * (-t + half_tau + half_tmax))
     )
 
     # --- DDE evolve ---
@@ -991,19 +1245,31 @@ def QST_CZKM(
         fig, ax = plt.subplots(1, 2, figsize=(10, 3.6))
 
         # left: pulses
-        ax[0].plot(t_list, g1, label=r"$\gamma_1(t)$")
-        ax[0].plot(t_list, g2, label=r"$\gamma_2(t)$")
+        ax[0].plot(t_list, g1, color=PLOT_COLORS["q1"], label=r"$\gamma_1(t)$")
+        ax[0].plot(t_list, g2, color=PLOT_COLORS["q2"], label=r"$\gamma_2(t)$")
         ax[0].set_xlabel("t")
         ax[0].set_ylabel(r"$\gamma(t)$")
         ax[0].legend()
         ax[0].set_title("Pulses")
         # ax[0].set_xlim(0, t_max)
 
-        ax[1].plot(t_list, p1_dde, label=r"DDE: $|c_1|^2$")
-        ax[1].plot(t_list, p2_dde, label=r"DDE: $|c_2|^2$")
+        ax[1].plot(t_list, p1_dde, color=PLOT_COLORS["q1"], label=r"DDE: $|c_1|^2$")
+        ax[1].plot(t_list, p2_dde, color=PLOT_COLORS["q2"], label=r"DDE: $|c_2|^2$")
         if WW_sim:
-            ax[1].plot(t_WW, pop_WW[:, 0], "--", label=r"WW: $|c_1|^2$")
-            ax[1].plot(t_WW, pop_WW[:, 1], "--", label=r"WW: $|c_2|^2$")
+            ax[1].plot(
+                t_WW,
+                pop_WW[:, 0],
+                "--",
+                color=PLOT_COLORS["dde"],
+                label=r"WW: $|c_1|^2$",
+            )
+            ax[1].plot(
+                t_WW,
+                pop_WW[:, 1],
+                "--",
+                color=PLOT_COLORS["ww"],
+                label=r"WW: $|c_2|^2$",
+            )
         ax[1].set_xlabel("t")
         ax[1].set_ylabel("population")
         ax[1].legend()
@@ -1013,8 +1279,14 @@ def QST_CZKM(
         fig.tight_layout()
 
     F = float(np.abs(c_dde[-1, 1]) ** 2)
+    if not return_link:
+        F_ww = float(pop_WW[-1, 1]) if WW_sim else None
+        return (F, F_ww) if WW_sim else F
+
+    n_link = np.clip(1.0 - np.sum(np.abs(c_dde[:, :2]) ** 2, axis=1), 0.0, None)
+    N_link = float(trapezoid(n_link, x=t_list))
     F_ww = float(pop_WW[-1, 1]) if WW_sim else None
-    return (F, F_ww) if WW_sim else F
+    return (F, F_ww, N_link) if WW_sim else (F, N_link)
 
 
 def CZKM_app(
@@ -1022,6 +1294,8 @@ def CZKM_app(
     T_list,
     tau=1.0,
     dt_max=0.01,
+    gamma0=None,
+    T=None,
     cache_file="czkm_app.npz",
     overwrite=False,
     n_jobs=-1,
@@ -1029,8 +1303,10 @@ def CZKM_app(
     filename="fig_czkm_app.pdf",
     show=True,
     dde_solver="simple",
+    figsize=(4.3, 6),
+    hspace=0.25,
 ):
-    """Compute and plot CZKM fidelities for paired gamma and duration inputs."""
+    """Compute CZKM fidelities and plot infidelity plus one representative dynamics panel."""
     if np.isscalar(gamma_list):
         gamma_list = np.ones(len(T_list)) * float(gamma_list)
     if np.isscalar(T_list):
@@ -1051,7 +1327,17 @@ def CZKM_app(
         cache = np.load(cache_file)
         gamma_arr = cache["gamma"]
         T_arr = cache["T"]
-        F_arr = cache["F"]
+        F_arr = np.asarray(cache["F"], float)
+        N_link_arr = (
+            np.asarray(cache["N_link"], float)
+            if "N_link" in cache.files
+            else (
+                -np.log(np.clip(np.asarray(cache["P_link_loss"], float), 1e-300, 1.0))
+                / float(cache["kappa"])
+                if "P_link_loss" in cache.files and "kappa" in cache.files
+                else np.full(gamma_arr.shape, np.nan, dtype=float)
+            )
+        )
     else:
         if overwrite and os.path.exists(cache_file):
             print("[CZKM] Overwriting cache.")
@@ -1067,59 +1353,170 @@ def CZKM_app(
                 tau,
                 dt_max=dt_max,
                 phi=0.0,
-                WW_sim=True,
+                WW_sim=False,
                 plot=False,
                 dde_solver=dde_solver,
+                return_link=True,
             )
 
-        F_list = Parallel(n_jobs=n_jobs, backend=backend, prefer="processes")(
+        results = Parallel(n_jobs=n_jobs, backend=backend, prefer="processes")(
             delayed(rub_one)(g, T) for g, T in zip(gamma_arr, T_arr)
         )
-        F_arr = np.asarray(F_list, dtype=float)
+        F_arr, N_link_arr = (np.asarray(values, float) for values in zip(*results))
 
-        np.savez(cache_file, gamma=gamma_arr, T=T_arr, F=F_arr)
+        np.savez(
+            cache_file,
+            gamma=gamma_arr,
+            T=T_arr,
+            F=F_arr,
+            N_link=N_link_arr,
+        )
         print(f"[CZKM] Saved to {cache_file}")
 
     T_over_tau = T_arr / float(tau)
     gamma_tau = gamma_arr * tau
-    infidelity = 1.0 - F_arr
+    F_dde = F_arr[:, 0] if F_arr.ndim > 1 else F_arr
+    infidelity = 1.0 - F_dde
     theory_full = np.exp(-gamma_arr * (T_over_tau - 1.0))
     theory_half = np.exp(-gamma_arr * (T_over_tau - 1.0) / 2)
+    # theory_half = 1 - np.tanh(gamma_arr * (T_over_tau - 1.0) / 4)
+    _ = N_link_arr
 
     cut = min(940, T_over_tau.size)
+    idx_dyn = min(len(gamma_arr) // 2, len(gamma_arr) - 1)
+    gamma0 = float(gamma_arr[idx_dyn] if gamma0 is None else gamma0)
+    T = float(T_arr[idx_dyn] if T is None else T)
+    t_max_dyn = T * tau
+    pulse_scale = 0.5 * gamma0
+    tanh_scale = 0.5 * gamma0
+    half_tau = 0.5 * tau
+    half_tmax = 0.5 * t_max_dyn
+
+    gamma1 = lambda t: pulse_scale * (
+        1.0 + np.tanh(tanh_scale * (t + half_tau - half_tmax))
+    )
+    gamma2 = lambda t: pulse_scale * (
+        1.0 + np.tanh(tanh_scale * (-t + half_tau + half_tmax))
+    )
+
+    dde = dde_scalar_simple if dde_solver == "simple" else dde_scalar
+    t_dyn_dde, c_dyn_dde = dde(
+        t_max=t_max_dyn,
+        gamma1=gamma1,
+        gamma2=gamma2,
+        phi=0.0,
+        tau=tau,
+        dt_max=dt_max,
+        t_start=0,
+    )
+    p_dyn_dde = np.abs(c_dyn_dde[:, :2]) ** 2
+
+    positions = [0.0, tau]
+    norm = np.sqrt(gamma0)
+
+    def g_time_mod(t):
+        """Map the sech pulses to the normalized WW modulation amplitudes."""
+        return np.array(
+            [
+                [np.sqrt(np.maximum(gamma1(t), 0.0)) / norm],
+                [np.sqrt(np.maximum(gamma2(t), 0.0)) / norm],
+            ],
+            dtype=float,
+        )
+
+    ww = WW(
+        Delta=100,
+        positions=positions,
+        gamma=gamma0,
+        n_modes=201,
+        L=tau,
+        setup=WG.Cable,
+        g_time_modulation=g_time_mod,
+    )
+    t_dyn_ww, pop_dyn_ww = ww.evolve(
+        t_max_dyn, n_steps=max(int(t_max_dyn / dt_max) + 1, 1001)
+    )
 
     # Plot
     with plt.rc_context():
         set_plot_style()
         plt.rcParams["axes.grid"] = False
 
-        fig, ax = plt.subplots(figsize=(4.3, 3))
+        fig, axes = plt.subplots(2, 1, figsize=figsize, gridspec_kw=dict(hspace=hspace))
+        ax_F, ax_D = axes
 
-        ax.plot(gamma_tau[:cut], infidelity[:cut], "-", label="sech-shape")
-        ax.plot(
+        ax_F.plot(
             gamma_tau[:cut],
-            theory_full[:cut],
-            "--",
-            label=r"$e^{-\gamma (T-\tau)}$",
+            infidelity[:cut],
+            "-",
+            color=PLOT_COLORS["czkm"],
+            label="sech-shape",
         )
-        ax.plot(
+        ax_F.plot(
             gamma_tau[:cut],
             theory_half[:cut],
             "--",
+            color=PLOT_COLORS["theory"],
             label=r"$e^{-\gamma (T-\tau)/2}$",
         )
+        ax_F.plot(
+            gamma_tau[:cut],
+            theory_full[:cut],
+            "--",
+            color=PLOT_COLORS["guide"],
+            label=r"$e^{-\gamma (T-\tau)}$",
+        )
 
-        ax.set_xlabel(r"$\gamma_0\tau$")
-        ax.set_ylabel(r"$1 - F$")
+        ax_F.set_xlabel(r"$\gamma_0\tau$")
+        ax_F.set_ylabel(r"$1 - F$")
+        ax_F.xaxis.set_label_coords(0.50, -0.18)
+        ax_F.yaxis.set_label_coords(-0.13, 0.50)
+        ax_F.set_xscale("log")
+        ax_F.set_yscale("log")
+        ax_F.legend(frameon=False, loc="best")
+        ax_F.text(-0.18, 0.95, "(a)", transform=ax_F.transAxes, ha="left", va="bottom")
 
-        ax.xaxis.set_label_coords(0.50, -0.12)
-        ax.yaxis.set_label_coords(-0.13, 0.50)
+        ax_D.plot(
+            t_dyn_dde / tau,
+            p_dyn_dde[:, 0],
+            lw=2.0,
+            color=PLOT_COLORS["q1"],
+            label=r"DDE: $Q_1$",
+        )
+        ax_D.plot(
+            t_dyn_dde / tau,
+            p_dyn_dde[:, 1],
+            lw=2.0,
+            color=PLOT_COLORS["q2"],
+            alpha=0.55,
+            label=r"DDE: $Q_2$",
+        )
+        ax_D.plot(
+            t_dyn_ww / tau,
+            pop_dyn_ww[:, 0],
+            "--",
+            lw=2.0,
+            color=PLOT_COLORS["dde"],
+            label=r"WW: $Q_1$",
+        )
+        ax_D.plot(
+            t_dyn_ww / tau,
+            pop_dyn_ww[:, 1],
+            "--",
+            lw=2.0,
+            color=PLOT_COLORS["ww"],
+            alpha=0.65,
+            label=r"WW: $Q_2$",
+        )
+        ax_D.set(xlim=(0, T), ylim=(-0.02, 1.02))
+        ax_D.set_xlabel(r"$t/\tau$")
+        ax_D.set_ylabel("Population")
+        ax_D.xaxis.set_label_coords(0.50, -0.18)
+        ax_D.yaxis.set_label_coords(-0.13, 0.50)
+        ax_D.legend(frameon=False, loc="best")
+        ax_D.text(-0.18, 0.95, "(b)", transform=ax_D.transAxes, ha="left", va="bottom")
 
-        ax.set_xscale("log")
-        ax.set_yscale("log")
-        ax.legend()
-
-        plt.tight_layout()
+        fig.subplots_adjust(left=0.14, right=0.98, top=0.98, bottom=0.14, hspace=hspace)
 
         if filename:
             fig.savefig(filename, dpi=600, bbox_inches="tight")
@@ -1131,9 +1528,11 @@ def CZKM_app(
 
 
 def fig_paper_QST_and_IF_vs_T(
-    data0="expt_002_cache.npz",
-    data1="expt_008_cache11_nodelay.npz",
+    data0="swap_qst.npz",
+    data1="stirap_qst.npz",
     ww_data="expt_009_renormalized_WW_fidelity.npz",
+    czkm_data="czkm_qst.npz",
+    kappa=0.1,
     tau=1.0,
     gamma=0.1,
     T_dyn=200.0,
@@ -1144,10 +1543,10 @@ def fig_paper_QST_and_IF_vs_T(
     dpi=600,
     hspace=0.12,
 ):
-    """Two-panel figure: (a) dynamics DDE vs WW; (b) infidelity vs duration."""
+    """Two-panel figure: infidelity vs duration above, link loss vs duration below."""
 
     # ----------------- helpers -----------------
-    def panel(axis, lab, xy=(-0.18, 1.02), fs=16):
+    def panel(axis, lab, xy=(-0.18, 0.95), fs=16):
         """Add a panel label with the paper's placement convention."""
         axis.text(
             *xy, lab, transform=axis.transAxes, ha="left", va="bottom", fontsize=fs
@@ -1166,59 +1565,62 @@ def fig_paper_QST_and_IF_vs_T(
             txt,
             xy=(x, y),
             xytext=(xt, yt),
-            color="k",
-            arrowprops=dict(arrowstyle="->", color="k", lw=1.0, shrinkA=0, shrinkB=0),
+            color=PLOT_COLORS["error"],
+            arrowprops=dict(
+                arrowstyle="->",
+                color=PLOT_COLORS["error"],
+                lw=1.0,
+                shrinkA=0,
+                shrinkB=0,
+            ),
             ha=ha,
             va=va,
         )
 
-    # ===================== (a) dynamics =====================
-    t_max = T_dyn * tau
-    gamma1 = lambda t: 0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (t - 0.5 * t_max)))
-    gamma2 = (
-        lambda t: 0.5 * gamma * (1.0 + np.tanh(0.5 * gamma * (0.5 * t_max - t + tau)))
-    )
+    def load_link_integral(cache):
+        """Load the integrated link occupancy from current or legacy cache fields."""
+        if "N_link" in cache.files:
+            return np.asarray(cache["N_link"], float)
+        if "P_link_loss" in cache.files and "kappa" in cache.files:
+            return -np.log(
+                np.clip(np.asarray(cache["P_link_loss"], float), 1e-300, 1.0)
+            ) / float(cache["kappa"])
+        if "P_loss" in cache.files:
+            return np.asarray(cache["P_loss"], float)
+        raise KeyError(
+            "Cache does not contain N_link or a recoverable legacy loss field."
+        )
 
-    t_list, c_dde = dde_scalar(
-        t_max=t_max, gamma1=gamma1, gamma2=gamma2, phi=phi, tau=tau, dt_max=dt_max
-    )
-    p_dde = np.abs(c_dde[:, :2]) ** 2
-
-    L, positions = tau, [0.0, tau]
-
-    def g_time_mod(t):
-        """Translate the DDE pulse rates into WW modulation amplitudes."""
-        m1 = np.sqrt(np.maximum(gamma1(t), 0.0) / gamma)
-        m2 = np.sqrt(np.maximum(gamma2(t), 0.0) / gamma)
-        return np.array([[m1], [m2]], dtype=float)
-
-    ww = WW(
-        Delta=100,
-        positions=positions,
-        gamma=gamma,
-        n_modes=201,
-        L=L,
-        setup=WG.Cable,
-        g_time_modulation=g_time_mod,
-    )
-    t_WW, pop_WW = ww.evolve(t_max, n_steps=1001)
-
-    # ===================== (b) IF vs T =====================
+    # ===================== cached data =====================
     swap_cache = np.load(data0)
     stirap_cache = np.load(data1)
     ww_cache = np.load(ww_data)
+    czkm_cache = np.load(czkm_data)
 
     T_swap = swap_cache["T"] / tau
     IF_swap = 1.0 - swap_cache["F"]
+    N_link_swap = load_link_integral(swap_cache)
+
     T_stirap = stirap_cache["T_opt"]
     IF_stirap = 1.0 - stirap_cache["F_opt"]
     gamma_stirap = stirap_cache["gamma"]
+    N_link_stirap = load_link_integral(stirap_cache)
+
+    T_czkm = czkm_cache["T"] / tau
+    F_czkm = np.asarray(czkm_cache["F"], float)
+    IF_czkm = 1.0 - (F_czkm[:, 0] if F_czkm.ndim > 1 else F_czkm)
+    N_link_czkm = load_link_integral(czkm_cache)
+
     T_ww = ww_cache["T"]
     D_ww = ww_cache["Delta"]
     IF_ww = ww_cache["IF"].reshape(len(T_ww), len(D_ww))
 
-    cut_swap = min(2000, len(T_swap))
+    cut_swap = len(T_swap)
     cut_stirap = min(940, len(T_stirap))
+    cut_czkm = min(940, len(T_czkm))
+    loss_swap = 1 - np.exp(-kappa * N_link_swap)
+    loss_stirap = 1 - np.exp(-kappa * N_link_stirap)
+    loss_czkm = 1 - np.exp(-kappa * N_link_czkm)
 
     # ===================== plot =====================
     with plt.rc_context():
@@ -1228,43 +1630,49 @@ def fig_paper_QST_and_IF_vs_T(
         fig, axes = plt.subplots(2, 1, figsize=figsize, gridspec_kw=dict(hspace=hspace))
         ax0, ax1 = axes
 
-        # ---- (a) ----
-        ax0.plot(t_list / tau, p_dde[:, 0], "k", lw=2.0, label=r"DDE: $Q1$")
-        ax0.plot(t_list / tau, p_dde[:, 1], "k", lw=2.0, alpha=0.55, label=r"DDE: $Q2$")
-        ax0.plot(t_WW / tau, pop_WW[:, 0], ls="--", lw=2.0, label=r"WW: $Q1$")
+        # ---- (a) infidelity ----
         ax0.plot(
-            t_WW / tau,
-            pop_WW[:, 1],
-            ls="--",
+            T_swap[:cut_swap],
+            IF_swap[:cut_swap],
+            "-",
             lw=2.0,
-            alpha=0.65,
-            label=r"WW: $Q2$",
+            color=PLOT_COLORS["swap"],
         )
-
-        ax0.set(xlim=(0, T_dyn), ylim=(-0.02, 1.02))
-        ax0.legend(frameon=False, loc="best")
-        place_labels(ax0, r"$t/\tau$", "Population")
-        panel(ax0, "(a)")
-
-        # ---- (b) ----
-        ax1.plot(T_swap[:cut_swap], IF_swap[:cut_swap], "-", lw=2.0)
-        ax1.plot(T_stirap[:cut_stirap], IF_stirap[:cut_stirap], "-", lw=2.0)
-        ax1.plot(
+        ax0.plot(
+            T_stirap[:cut_stirap],
+            IF_stirap[:cut_stirap],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["stirap"],
+        )
+        ax0.plot(
             T_stirap[:cut_stirap],
             np.exp(-gamma_stirap[:cut_stirap] * (T_stirap[:cut_stirap] - 1)),
             "--",
             lw=1.6,
+            color=PLOT_COLORS["theory"],
+        )
+        ax0.plot(
+            T_czkm[:cut_czkm],
+            IF_czkm[:cut_czkm],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["czkm"],
         )
 
         markers = ["o", "D", "^"]
         sizes = [55, 40, 70]
         edge_widths = [0.8, 0.8, 1.0]
-        colors = ["#8172b3", "#937860", "#ccb974"]  # keep your palette
+        colors = [
+            PLOT_COLORS["scatter_a"],
+            PLOT_COLORS["scatter_b"],
+            PLOT_COLORS["scatter_c"],
+        ]
 
         for j, (col, marker, s, ew) in enumerate(
             zip(colors, markers, sizes, edge_widths)
         ):
-            ax1.scatter(
+            ax0.scatter(
                 T_ww,
                 IF_ww[:, j],
                 s=s,
@@ -1272,13 +1680,15 @@ def fig_paper_QST_and_IF_vs_T(
                 color=col,
                 edgecolor="white",
                 marker=marker,
-                label=rf"$\Delta/\omega_\mathrm{{FSR}}={D_ww[j]:g}$",
+                label=rf"$\Delta:{D_ww[j]:g}$",
                 zorder=5,
             )
 
-        i_swap, i_sti = 870, 518
+        i_swap = min(870, cut_swap - 1)
+        i_sti = min(518, cut_stirap - 1)
+        i_czkm = min(350, cut_czkm - 1)
         annot(
-            ax1,
+            ax0,
             "SWAP",
             T_swap[i_swap],
             IF_swap[i_swap],
@@ -1288,7 +1698,7 @@ def fig_paper_QST_and_IF_vs_T(
             va="top",
         )
         annot(
-            ax1,
+            ax0,
             "STIRAP",
             T_stirap[i_sti],
             IF_stirap[i_sti],
@@ -1297,16 +1707,56 @@ def fig_paper_QST_and_IF_vs_T(
             ha="right",
             va="top",
         )
+        annot(
+            ax0,
+            "CZKM",
+            T_czkm[i_czkm],
+            IF_czkm[i_czkm],
+            T_czkm[i_czkm] * 1.15,
+            IF_czkm[i_czkm] * 0.35,
+            ha="left",
+            va="top",
+        )
 
+        ax0.set_xscale("log")
+        ax0.set_yscale("log")
+        ax0.set_ylim(1e-10, 1.2)
+        ax0.legend(frameon=False, loc=(0.05, 0.02))
+        place_labels(ax0, r"$T/\tau$", r"$1-F$")
+        panel(ax0, "(a)")
+
+        # ---- (b) link loss ----
+        ax1.plot(
+            T_swap[:cut_swap],
+            loss_swap[:cut_swap],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["swap"],
+            label="SWAP",
+        )
+        ax1.plot(
+            T_stirap[:cut_stirap],
+            loss_stirap[:cut_stirap],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["stirap"],
+            label="STIRAP",
+        )
+        ax1.plot(
+            T_czkm[:cut_czkm],
+            loss_czkm[:cut_czkm],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["czkm"],
+            label="CZKM",
+        )
         ax1.set_xscale("log")
-        ax1.set_yscale("log")
-        ax1.set_ylim(1e-10, 1)
-        ax1.legend(frameon=False, loc=(0.05, 0.02))
-
-        place_labels(ax1, r"$T/\tau$", r"$1-F$")
+        # ax1.set_yscale("log")
+        # ax1.set_ylim(1e-10, 1)
+        ax1.legend(frameon=False, loc="best")
+        place_labels(ax1, r"$T/\tau$", r"$P_{loss}$")
         panel(ax1, "(b)")
 
-        # unified margins (like your appendix figs)
         fig.subplots_adjust(left=0.14, right=0.98, top=0.98, bottom=0.14, hspace=hspace)
 
         if save is not None:
