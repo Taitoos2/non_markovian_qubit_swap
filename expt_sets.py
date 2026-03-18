@@ -32,9 +32,28 @@ PLOT_COLORS = {
 }
 
 
+def load_link_integral(cache):
+    """Return ``N_link`` from a cache, including legacy-compatible fallbacks."""
+    if "N_link" in cache.files:
+        return np.asarray(cache["N_link"], float)
+    if "P_link_loss" in cache.files and "kappa" in cache.files:
+        return -np.log(
+            np.clip(np.asarray(cache["P_link_loss"], float), 1e-300, 1.0)
+        ) / float(cache["kappa"])
+    if "P_loss" in cache.files:
+        return np.asarray(cache["P_loss"], float)
+    raise KeyError("Cache does not contain N_link or a recoverable legacy loss field.")
+
+
 # ------------------------------------------------------------------------------------
 def dde_series_function(gamma, tau, eta, N, alpha=None):
-    """Return the truncated DDE series solution as a callable of time."""
+    """Build a truncated analytic DDE series evaluator.
+
+    Inputs are the decay scale ``gamma``, delay ``tau``, phase factor ``eta``,
+    truncation order ``N``, and optional damping ``alpha``. Returns a callable
+    ``f(t)`` that evaluates the complex series solution on scalar or array time
+    inputs.
+    """
     if alpha is None:
         alpha = 0.5 * gamma
 
@@ -65,7 +84,12 @@ def dde_series_function(gamma, tau, eta, N, alpha=None):
 
 
 def compute_period_and_fidelity(Delta, gamma, tau=1, T_min=0.8, T_max=1.2):
-    """Estimate the period, peak fidelity, and integrated link occupancy."""
+    """Estimate the SWAP period, peak fidelity, and channel exposure.
+
+    Inputs are the detuning ``Delta``, effective decay ``gamma``, delay ``tau``,
+    and the search window ``[T_min, T_max]`` in units of the analytic period.
+    Returns ``(g/FSR, T, t_peak, F_peak, N_link)``.
+    """
     FSR = np.pi / tau
     phi = math.modf(Delta)[0] * FSR * tau
     eta_b = np.exp(1j * phi)
@@ -107,7 +131,12 @@ def expt_002_swapspeed(
     overwrite=False,
     filename="expt_002_cache.npz",
 ):
-    """Scan SWAP speed versus gamma, caching only the integrated link occupancy."""
+    """Scan SWAP performance over ``gamma`` and cache the main observables.
+
+    The cache stores the optimal time, fidelity, and integrated link occupancy.
+    When plotted, the third panel converts ``N_link`` to link loss using
+    ``1 - exp(-kappa * N_link)``.
+    """
     if os.path.exists(filename) and not overwrite:
         print(f"[load] {filename}")
         data = np.load(filename)
@@ -363,7 +392,7 @@ def swap_appendix_graph(
 
 # ==================================================================================
 def gamma_pulse(gamma, T, tau):
-    """Return the undelayed STIRAP-like pulse pair."""
+    """Return the undelayed pulse pair ``(gamma1, gamma2)`` for STIRAP."""
     den = 2.0 * T * tau
     return (
         lambda t: gamma * np.sin(np.pi * t / den) ** 2,
@@ -372,7 +401,7 @@ def gamma_pulse(gamma, T, tau):
 
 
 def gamma_pulse_delay(gamma, T, tau=1.0):
-    """Return the delayed pulse pair with piecewise saturation."""
+    """Return the delayed pulse pair ``(gamma1, gamma2)`` with end saturation."""
     limit = (T - 1.0) * tau
     den = 2.0 * limit
     return (
@@ -382,7 +411,12 @@ def gamma_pulse_delay(gamma, T, tau=1.0):
 
 
 def Fidelity(gamma, tau, phi, T, dt_max, pulse_delay, return_link=False):
-    """Compute the final STIRAP fidelity and, optionally, the link integral."""
+    """Run one STIRAP DDE simulation.
+
+    Returns the final fidelity by default. If ``return_link=True``, also returns
+    the integrated link occupancy ``N_link`` computed from the two-qubit
+    populations along the trajectory.
+    """
     gamma1, gamma2 = (gamma_pulse_delay if pulse_delay else gamma_pulse)(gamma, T, tau)
     t_list, c = dde_scalar(
         t_max=T * tau,
@@ -410,7 +444,11 @@ def stirap_optimal_Peak(
     dt_max=0.01,
     pulse_delay=True,
 ):
-    """Optimize the pulse duration and report the associated link integral."""
+    """Optimize the STIRAP duration over ``T_range``.
+
+    Returns ``(T_opt, F_opt, N_link_opt)`` for the best duration found by the
+    bounded scalar search.
+    """
     if T_range is None:
         T_range = [0.5, 10.0 / np.sqrt(gamma)]
     res = minimize_scalar(
@@ -447,7 +485,11 @@ def expt_008_ScanGamma_Refined(
     cache_file="expt_008_cache.npz",
     overwrite=False,
 ):
-    """Scan the optimal STIRAP duration over gamma and cache only the link integral."""
+    """Scan the optimal STIRAP duration over ``gamma``.
+
+    The cache stores ``gamma``, ``T_opt``, ``F_opt``, and ``N_link``. Plotting
+    converts ``N_link`` to link loss only at display time.
+    """
     gamma_list = np.asarray(gamma_list, float)
 
     if cache_file and os.path.exists(cache_file) and not overwrite:
@@ -459,9 +501,9 @@ def expt_008_ScanGamma_Refined(
         if "N_link" in cache.files:
             N_link = np.asarray(cache["N_link"], float)
         elif "P_link_loss" in cache.files and "kappa" in cache.files:
-            N_link = -np.log(np.clip(np.asarray(cache["P_link_loss"], float), 1e-300, 1.0)) / float(
-                cache["kappa"]
-            )
+            N_link = -np.log(
+                np.clip(np.asarray(cache["P_link_loss"], float), 1e-300, 1.0)
+            ) / float(cache["kappa"])
         else:
             N_link = np.full_like(F_opt, np.nan, dtype=float)
     else:
@@ -535,7 +577,7 @@ def stirap_appendix_graph(
     figsize=(7.2, 7.2),
     hspace: float = 0.10,
 ):
-    """Generate the appendix figure summarizing the STIRAP scaling trends."""
+    """Generate the STIRAP appendix figure from one T-scan plus cached trends."""
     T_list = np.asarray(T_list, float)
 
     def load_cache(path: str):
@@ -629,23 +671,6 @@ def stirap_appendix_graph(
             color=PLOT_COLORS["stirap"],
             label=r"$1-F$",
         )
-        # axis.plot(
-        #     gamma_czkm[:cut], 1.0 - F_czkm[:cut], "--", lw=2.0, color=PLOT_COLORS["czkm"], label=r"sech-shape"
-        # )
-        # axis.plot(
-        #     gamma_czkm[:cut],
-        #     y_ref[:940],
-        #     "--",
-        #     lw=2.0,
-        #     label=r"$e^{-\gamma_0(T/\tau-1)}$",
-        # )
-        # axis.plot(
-        #     gamma_czkm[:cut],
-        #     y_sec[:940],
-        #     "--",
-        #     lw=2.0,
-        #     label=r"$e^{-\gamma_0(T/\tau-1)/2}$",
-        # )
         axis.plot(
             gamma_ref,
             gamma_ref**2 / 50000,
@@ -682,7 +707,11 @@ def renormalize_WW_opimized(
     plot=True,
     opt=True,
 ):
-    """Fit WW parameters so its dynamics best match the DDE reference trace."""
+    """Fit WW parameters so the WW dynamics best match a DDE reference trace.
+
+    Returns the optimized WW parameters together with the objective value used in
+    the fit.
+    """
     # ---------- paras ----------
     setup_kind = WG.Ring if PBC else WG.Cable
     L = (2.0 if PBC else 1.0) * tau
@@ -827,7 +856,11 @@ def expt_009_renormalized_WW_fidelity(
     n_jobs=-1,
     savefile="expt_009_renormalized_WW_fidelity.npz",
 ):
-    """Evaluate the renormalized WW infidelity on a small Delta-gamma grid."""
+    """Evaluate renormalized WW infidelity on a ``(T, Delta)`` grid.
+
+    This routine reuses the WW renormalization step, stores the resulting
+    infidelity grid, and optionally saves it for later figure generation.
+    """
     d = np.load(data, allow_pickle=True)
 
     gamma_all = np.asarray(d["gamma"], dtype=float)
@@ -887,7 +920,7 @@ def plot_IF_vs_T(
     ww_data="expt_009_renormalized_WW_fidelity.npz",
     tau=1.0,
 ):
-    """Compare infidelity-versus-time curves across the cached protocols."""
+    """Plot cached infidelity-versus-time curves for the available protocols."""
     # ---------- load ----------
     swap_cache = np.load(data0)
     stirap_cache = np.load(data1)
@@ -1145,12 +1178,16 @@ def QST_CZKM(
     dde_solver="simple",
     return_link=False,
 ):
-    """
-    Smooth CZKM-like emission/absorption pulses for 2-node QST under DDE.
+    """Run one smooth CZKM-like QST simulation.
 
-    gamma: overall coupling scale
-    T    : dimensionless total time in units of tau (t_max = T*tau)
-    tau  : delay time
+    Inputs:
+        gamma: overall coupling scale
+        T: dimensionless total duration in units of ``tau``
+        tau: delay time
+
+    Returns the final DDE fidelity by default. If ``WW_sim=True``, also returns
+    the WW fidelity. If ``return_link=True``, appends the integrated link
+    occupancy ``N_link``.
     """
 
     t_max = T * tau
@@ -1273,7 +1310,11 @@ def CZKM_app(
     figsize=(4.3, 6),
     hspace=0.25,
 ):
-    """Compute CZKM fidelities and plot infidelity plus one representative dynamics panel."""
+    """Compute or load CZKM data and draw the main two-panel summary figure.
+
+    The upper panel shows one representative dynamics trace, while the lower
+    panel shows infidelity versus ``gamma*tau`` together with reference curves.
+    """
     gamma_is_scalar = np.isscalar(gamma_list)
     T_is_scalar = np.isscalar(T_list)
     if gamma_is_scalar and T_is_scalar:
@@ -1504,9 +1545,9 @@ def fig_paper_IF_vs_T(
     save=None,
     dpi=600,
 ):
-    """Plot the transfer infidelity comparison as a standalone figure."""
+    """Plot the paper-style infidelity comparison versus ``T/tau``."""
 
-    def place_labels(axis, xlabel, ylabel, x=(-0.0, -0.12), y=(-0.12, 0.5)):
+    def place_labels(axis, xlabel, ylabel, x=(-0.0, -0.1), y=(-0.12, 0.5)):
         axis.set_xlabel(xlabel)
         axis.set_ylabel(ylabel)
         axis.xaxis.set_label_coords(0.5, x[1])
@@ -1663,26 +1704,17 @@ def fig_paper_loss_vs_T(
     save=None,
     dpi=600,
 ):
-    """Plot the link-loss comparison as a standalone figure."""
+    """Plot the paper-style link-loss comparison versus ``T/tau``.
 
-    def place_labels(axis, xlabel, ylabel, x=(-0.0, -0.12), y=(-0.12, 0.5)):
+    If ``fit=True``, also overlays quadratic fits in ``log(P_loss)`` versus
+    ``log(T/tau)`` and prints the fitted expressions.
+    """
+
+    def place_labels(axis, xlabel, ylabel, x=(-0.0, -0.1), y=(-0.12, 0.5)):
         axis.set_xlabel(xlabel)
         axis.set_ylabel(ylabel)
         axis.xaxis.set_label_coords(0.5, x[1])
         axis.yaxis.set_label_coords(y[0], y[1])
-
-    def load_link_integral(cache):
-        if "N_link" in cache.files:
-            return np.asarray(cache["N_link"], float)
-        if "P_link_loss" in cache.files and "kappa" in cache.files:
-            return -np.log(
-                np.clip(np.asarray(cache["P_link_loss"], float), 1e-300, 1.0)
-            ) / float(cache["kappa"])
-        if "P_loss" in cache.files:
-            return np.asarray(cache["P_loss"], float)
-        raise KeyError(
-            "Cache does not contain N_link or a recoverable legacy loss field."
-        )
 
     def fit_log_poly(x, y, degree=2):
         x = np.asarray(x, float)
@@ -1807,33 +1839,23 @@ def fig_paper_loss_vs_T_poly(
     czkm_data="czkm_qst.npz",
     kappa=0.1,
     tau=1.0,
-    degree=2,
     fit_min=None,
     fit_max=None,
     figsize=(4.3, 3),
     save=None,
     dpi=600,
 ):
-    """Plot the link loss together with power-law fits in T/tau."""
+    """Plot link loss together with power-law fits in ``T/tau``.
 
-    def place_labels(axis, xlabel, ylabel, x=(-0.0, -0.12), y=(-0.12, 0.5)):
+    ``fit_min`` and ``fit_max`` limit the data used to estimate the fit, while
+    the fitted curve is drawn over the full plotted domain.
+    """
+
+    def place_labels(axis, xlabel, ylabel, x=(-0.0, -0.1), y=(-0.12, 0.5)):
         axis.set_xlabel(xlabel)
         axis.set_ylabel(ylabel)
         axis.xaxis.set_label_coords(0.5, x[1])
         axis.yaxis.set_label_coords(y[0], y[1])
-
-    def load_link_integral(cache):
-        if "N_link" in cache.files:
-            return np.asarray(cache["N_link"], float)
-        if "P_link_loss" in cache.files and "kappa" in cache.files:
-            return -np.log(
-                np.clip(np.asarray(cache["P_link_loss"], float), 1e-300, 1.0)
-            ) / float(cache["kappa"])
-        if "P_loss" in cache.files:
-            return np.asarray(cache["P_loss"], float)
-        raise KeyError(
-            "Cache does not contain N_link or a recoverable legacy loss field."
-        )
 
     def fit_power_law(x, y):
         x = np.asarray(x, float)
@@ -1943,82 +1965,3 @@ def fig_paper_loss_vs_T_poly(
     format_power_law("SWAP", coeff_swap)
     format_power_law("STIRAP", coeff_stirap)
     format_power_law("CZKM", coeff_czkm)
-
-
-def fitting_linkloss(
-    data0="swap_qst.npz",
-    data1="stirap_qst.npz",
-    ww_data="expt_009_renormalized_WW_fidelity.npz",
-    czkm_data="czkm_qst.npz",
-    kappa=0.1,
-    tau=1.0,
-):
-    # ----------------- helpers -----------------
-
-    def load_link_integral(cache):
-        """Load the integrated link occupancy from current or legacy cache fields."""
-        if "N_link" in cache.files:
-            return np.asarray(cache["N_link"], float)
-        if "P_link_loss" in cache.files and "kappa" in cache.files:
-            return -np.log(
-                np.clip(np.asarray(cache["P_link_loss"], float), 1e-300, 1.0)
-            ) / float(cache["kappa"])
-        if "P_loss" in cache.files:
-            return np.asarray(cache["P_loss"], float)
-        raise KeyError(
-            "Cache does not contain N_link or a recoverable legacy loss field."
-        )
-
-    # ===================== cached data =====================
-    swap_cache = np.load(data0)
-    stirap_cache = np.load(data1)
-    ww_cache = np.load(ww_data)
-    czkm_cache = np.load(czkm_data)
-
-    T_swap = swap_cache["T"] / tau
-    IF_swap = 1.0 - swap_cache["F"]
-    N_link_swap = load_link_integral(swap_cache)
-
-    T_stirap = stirap_cache["T_opt"]
-    IF_stirap = 1.0 - stirap_cache["F_opt"]
-    gamma_stirap = stirap_cache["gamma"]
-    N_link_stirap = load_link_integral(stirap_cache)
-
-    T_czkm = czkm_cache["T"] / tau
-    F_czkm = np.asarray(czkm_cache["F"], float)
-    IF_czkm = 1.0 - (F_czkm[:, 0] if F_czkm.ndim > 1 else F_czkm)
-    N_link_czkm = load_link_integral(czkm_cache)
-
-    T_ww = ww_cache["T"]
-    D_ww = ww_cache["Delta"]
-    IF_ww = ww_cache["IF"].reshape(len(T_ww), len(D_ww))
-
-    cut_swap = len(T_swap)
-    cut_stirap = min(940, len(T_stirap))
-    cut_czkm = min(940, len(T_czkm))
-    loss_swap = 1 - np.exp(-kappa * N_link_swap)
-    loss_stirap = 1 - np.exp(-kappa * N_link_stirap)
-    loss_czkm = 1 - np.exp(-kappa * N_link_czkm)
-    import numpy as np
-
-    def fit_log_series(x, y, degree=2, mask_positive=True):
-        x = np.asarray(x, dtype=float)
-        y = np.asarray(y, dtype=float)
-
-        if mask_positive:
-            valid_mask = (x > 0) & (y > 0) & np.isfinite(x) & np.isfinite(y)
-        else:
-            valid_mask = np.isfinite(x) & np.isfinite(y)
-
-        x_valid = x[valid_mask]
-        y_valid = y[valid_mask]
-
-        logx = np.log(x_valid)
-        logy = np.log(y_valid)
-
-        coeffs = np.polyfit(logx, logy, degree)
-
-        y_fit = np.full_like(x, np.nan, dtype=float)
-        y_fit[valid_mask] = np.exp(np.polyval(coeffs, np.log(x_valid)))
-
-        return coeffs, y_fit, valid_mask
