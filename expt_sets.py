@@ -5,8 +5,7 @@ import math
 from joblib import Parallel, delayed
 from numpy.polynomial import Polynomial
 from qnetwork.dde import EmittersInWaveguideDDE
-from aux_funs import dde_scalar
-from aux_funs import dde_scalar_simple as dde_scalar_simple
+from aux_funs import dde_scalar, dde_scalar_simple
 from scipy.interpolate import interp1d
 from scipy.optimize import minimize_scalar
 from scipy.optimize import minimize
@@ -67,37 +66,20 @@ def dde_series_function(gamma, tau, eta, N, alpha=None):
 
 def compute_period_and_fidelity(Delta, gamma, tau=1, T_min=0.8, T_max=1.2):
     """Estimate the period, peak fidelity, and integrated link occupancy."""
-    # phase
     FSR = np.pi / tau
     phi = math.modf(Delta)[0] * FSR * tau
-    phase = np.exp(1j * phi)
-    eta_b = phase
-    eta_d = -phase
-
-    # p1(gamma, t)
-    def make_p1(gamma, T_max):
-        """Build the source-qubit population curve."""
-        n_terms = int(T_max / tau)
-        cb = dde_series_function(gamma, tau, eta_b, n_terms)
-        cd = dde_series_function(gamma, tau, eta_d, n_terms)
-        return lambda t: np.abs(0.5 * (cb(t) + cd(t))) ** 2
-
-    # p2(gamma, t)
-    def make_p2(gamma, T_max):
-        """Build the target-state population curve used in the peak search."""
-        n_terms = int(T_max / tau)
-        cb = dde_series_function(gamma, tau, eta_b, n_terms)
-        cd = dde_series_function(gamma, tau, eta_d, n_terms)
-        return lambda t: np.abs(0.5 * (cb(t) - cd(t))) ** 2
+    eta_b = np.exp(1j * phi)
+    eta_d = -eta_b
 
     g = np.sqrt(gamma / (2 * tau))
-    # analytic Omega
     Omega = np.sqrt(Delta**2 + 8 * g**2) / 2
     T = np.pi / Omega
-    p1 = make_p1(gamma, T_max * T)
-    p2 = make_p2(gamma, T_max * T)
+    n_terms = int(T_max * T / tau)
+    cb = dde_series_function(gamma, tau, eta_b, n_terms)
+    cd = dde_series_function(gamma, tau, eta_d, n_terms)
+    p1 = lambda t: np.abs(0.5 * (cb(t) + cd(t))) ** 2
+    p2 = lambda t: np.abs(0.5 * (cb(t) - cd(t))) ** 2
 
-    # peak search
     res = minimize_scalar(
         lambda t: -p2(t),
         bounds=(T_min * T, T_max * T),
@@ -106,7 +88,7 @@ def compute_period_and_fidelity(Delta, gamma, tau=1, T_min=0.8, T_max=1.2):
     )
     t_peak, F = float(res.x), float(-res.fun)
 
-    # Link exposure: integrate the probability weight living in the channel.
+    # Integrate the probability weight living in the link up to the peak time.
     t_grid = np.linspace(0.0, t_peak, 4001)
     n_loss = np.clip(1.0 - p1(t_grid) - p2(t_grid), 0.0, None)
     N_link = float(trapezoid(n_loss, x=t_grid))
@@ -274,6 +256,7 @@ def swap_appendix_graph(
     # ---------- plot ----------
     with plt.rc_context():
         set_plot_style()
+        plt.rcParams["mathtext.fontset"] = "cm"
         plt.rcParams["axes.grid"] = False
 
         fig, axes = plt.subplots(3, 1, figsize=figsize, gridspec_kw=dict(hspace=hspace))
@@ -318,7 +301,7 @@ def swap_appendix_graph(
         )
         # axis.grid(True, which="both", alpha=0.30)
         axis.legend(frameon=False)
-        place_labels(axis, r"$t/\tau$", r"$\langle \sigma^\dagger \sigma \rangle$")
+        place_labels(axis, r"$t/\tau$", r"$\langle \sigma^+ \sigma \rangle$")
         panel(axis, "(a)")
 
         # ========== (b) T_opt vs gamma ==========
@@ -467,88 +450,74 @@ def expt_008_ScanGamma_Refined(
     """Scan the optimal STIRAP duration over gamma and cache only the link integral."""
     gamma_list = np.asarray(gamma_list, float)
 
-    def _plot_008(gamma, T_opt, F_opt, N_link):
-        """Plot the optimal duration, infidelity, and link loss versus gamma."""
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-        ax_T, ax_F, ax_L = axes
-        P_link_loss = 1.0 - np.exp(-kappa * N_link)
-
-        ax_T.plot(gamma, T_opt, "-", color=PLOT_COLORS["stirap"])
-        ax_T.set_xscale("log")
-        ax_T.set_yscale("log")
-        ax_T.set_xlabel(r"$\gamma$")
-        ax_T.set_ylabel(r"$T^*$")
-        ax_T.set_title("Optimal T")
-
-        ax_F.plot(gamma, 1.0 - F_opt, "-", color=PLOT_COLORS["stirap"])
-        ax_F.set_xscale("log")
-        ax_F.set_yscale("log")
-        ax_F.set_xlabel(r"$\gamma$")
-        ax_F.set_ylabel(r"$1-F$")
-        ax_F.set_title("Minimal infidelity")
-
-        ax_L.plot(gamma, P_link_loss, "-", color=PLOT_COLORS["stirap"])
-        ax_L.set_xscale("log")
-        ax_L.set_yscale("log")
-        ax_L.set_xlabel(r"$\gamma$")
-        ax_L.set_ylabel(r"$1-e^{-\kappa \int n(t)\,dt}$")
-        ax_L.set_title("Link loss")
-
-        fig.tight_layout()
-        plt.show()
-
     if cache_file and os.path.exists(cache_file) and not overwrite:
         print(f"[info] load cache: {cache_file}")
         cache = np.load(cache_file)
-        gamma = np.asarray(cache["gamma"], float)
-        T_opt = cache["T_opt"]
-        F_opt = cache["F_opt"]
-        N_link = (
-            np.asarray(cache["N_link"], float)
-            if "N_link" in cache.files
-            else (
-                -np.log(np.clip(np.asarray(cache["P_link_loss"], float), 1e-300, 1.0))
-                / float(cache["kappa"])
-                if "P_link_loss" in cache.files and "kappa" in cache.files
-                else np.full_like(F_opt, np.nan, dtype=float)
+        gamma_vals = np.asarray(cache["gamma"], float)
+        T_opt = np.asarray(cache["T_opt"], float)
+        F_opt = np.asarray(cache["F_opt"], float)
+        if "N_link" in cache.files:
+            N_link = np.asarray(cache["N_link"], float)
+        elif "P_link_loss" in cache.files and "kappa" in cache.files:
+            N_link = -np.log(np.clip(np.asarray(cache["P_link_loss"], float), 1e-300, 1.0)) / float(
+                cache["kappa"]
             )
+        else:
+            N_link = np.full_like(F_opt, np.nan, dtype=float)
+    else:
+        results = Parallel(n_jobs=n_jobs, prefer="processes")(
+            delayed(stirap_optimal_Peak)(
+                gamma=g,
+                T_range=T_range,
+                phi=phi,
+                tau=tau,
+                dt_max=dt_max,
+                pulse_delay=pulse_delay,
+            )
+            for g in gamma_list
         )
+        T_opt, F_opt, N_link = (np.asarray(values, float) for values in zip(*results))
+        gamma_vals = gamma_list
+        if cache_file:
+            np.savez(
+                cache_file,
+                gamma=gamma_vals,
+                T_opt=T_opt,
+                F_opt=F_opt,
+                N_link=N_link,
+            )
+            print(f"[info] saved cache: {cache_file}")
 
-        if plot:
-            _plot_008(gamma, T_opt, F_opt, N_link)
-
+    if not plot:
         return
 
-    # ---------- compute ----------
-    def run_one_gamma(g):
-        """Run the one-parameter STIRAP optimization for a single gamma."""
-        T_opt, F_opt, N_link_opt = stirap_optimal_Peak(
-            gamma=g,
-            T_range=T_range,
-            phi=phi,
-            tau=tau,
-            dt_max=dt_max,
-            pulse_delay=pulse_delay,
-        )
-        return T_opt, F_opt, N_link_opt
+    plt.rcParams["mathtext.fontset"] = "cm"
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    P_link_loss = 1.0 - np.exp(-kappa * N_link)
 
-    results = Parallel(n_jobs=n_jobs, prefer="processes")(
-        delayed(run_one_gamma)(g) for g in gamma_list
-    )
-    T_opt, F_opt, N_link_opt = (np.asarray(values, float) for values in zip(*results))
-    # ---------- save ----------
-    if cache_file:
-        np.savez(
-            cache_file,
-            gamma=gamma_list,
-            T_opt=T_opt,
-            F_opt=F_opt,
-            N_link=N_link_opt,
-        )
-        print(f"[info] saved cache: {cache_file}")
+    axes[0].plot(gamma_vals, T_opt, "-", color=PLOT_COLORS["stirap"])
+    axes[0].set_xscale("log")
+    axes[0].set_yscale("log")
+    axes[0].set_xlabel(r"$\gamma$")
+    axes[0].set_ylabel(r"$T^*$")
+    axes[0].set_title("Optimal T")
 
-    if plot:
-        _plot_008(gamma_list, T_opt, F_opt, N_link_opt)
+    axes[1].plot(gamma_vals, 1.0 - F_opt, "-", color=PLOT_COLORS["stirap"])
+    axes[1].set_xscale("log")
+    axes[1].set_yscale("log")
+    axes[1].set_xlabel(r"$\gamma$")
+    axes[1].set_ylabel(r"$1-F$")
+    axes[1].set_title("Minimal infidelity")
+
+    axes[2].plot(gamma_vals, P_link_loss, "-", color=PLOT_COLORS["stirap"])
+    axes[2].set_xscale("log")
+    axes[2].set_yscale("log")
+    axes[2].set_xlabel(r"$\gamma$")
+    axes[2].set_ylabel(r"$1-e^{-\kappa \int n(t)\,dt}$")
+    axes[2].set_title("Link loss")
+
+    fig.tight_layout()
+    plt.show()
 
 
 # ---------------------------------
@@ -589,14 +558,12 @@ def stirap_appendix_graph(
     gamma_ref, T_opt_ref, F_opt_ref = load_cache(cache_file_nodelay)
 
     # CZKM
-    cache = np.load("czkm_app.npz")
-    gamma_czkm = np.asarray(cache["gamma"], float)
-    F_czkm = np.asarray(cache["F"], float)
     cut = 940
 
     # ---------- plot ----------
     with plt.rc_context():
         set_plot_style()
+        plt.rcParams["mathtext.fontset"] = "cm"
         plt.rcParams["axes.grid"] = False
 
         fig, axes = plt.subplots(3, 1, figsize=figsize, gridspec_kw=dict(hspace=hspace))
@@ -1307,13 +1274,18 @@ def CZKM_app(
     hspace=0.25,
 ):
     """Compute CZKM fidelities and plot infidelity plus one representative dynamics panel."""
-    if np.isscalar(gamma_list):
-        gamma_list = np.ones(len(T_list)) * float(gamma_list)
-    if np.isscalar(T_list):
-        T_list = np.ones(len(T_list)) * float(T_list)
-
-    gamma_arr = np.asarray(gamma_list, float).ravel()
-    T_arr = np.asarray(T_list, float).ravel()
+    gamma_is_scalar = np.isscalar(gamma_list)
+    T_is_scalar = np.isscalar(T_list)
+    if gamma_is_scalar and T_is_scalar:
+        gamma_arr = np.array([float(gamma_list)])
+        T_arr = np.array([float(T_list)])
+    else:
+        gamma_arr = np.asarray(gamma_list, float).ravel()
+        T_arr = np.asarray(T_list, float).ravel()
+        if gamma_is_scalar:
+            gamma_arr = np.full(T_arr.shape, float(gamma_list))
+        if T_is_scalar:
+            T_arr = np.full(gamma_arr.shape, float(T_list))
 
     if gamma_arr.shape != T_arr.shape:
         raise ValueError(
@@ -1379,8 +1351,6 @@ def CZKM_app(
     infidelity = 1.0 - F_dde
     theory_full = np.exp(-gamma_arr * (T_over_tau - 1.0))
     theory_half = np.exp(-gamma_arr * (T_over_tau - 1.0) / 2)
-    # theory_half = 1 - np.tanh(gamma_arr * (T_over_tau - 1.0) / 4)
-    _ = N_link_arr
 
     cut = min(940, T_over_tau.size)
     idx_dyn = min(len(gamma_arr) // 2, len(gamma_arr) - 1)
@@ -1414,16 +1384,6 @@ def CZKM_app(
     positions = [0.0, tau]
     norm = np.sqrt(gamma0)
 
-    def g_time_mod(t):
-        """Map the sech pulses to the normalized WW modulation amplitudes."""
-        return np.array(
-            [
-                [np.sqrt(np.maximum(gamma1(t), 0.0)) / norm],
-                [np.sqrt(np.maximum(gamma2(t), 0.0)) / norm],
-            ],
-            dtype=float,
-        )
-
     ww = WW(
         Delta=100,
         positions=positions,
@@ -1431,7 +1391,13 @@ def CZKM_app(
         n_modes=201,
         L=tau,
         setup=WG.Cable,
-        g_time_modulation=g_time_mod,
+        g_time_modulation=lambda t: np.array(
+            [
+                [np.sqrt(np.maximum(gamma1(t), 0.0)) / norm],
+                [np.sqrt(np.maximum(gamma2(t), 0.0)) / norm],
+            ],
+            dtype=float,
+        ),
     )
     t_dyn_ww, pop_dyn_ww = ww.evolve(
         t_max_dyn, n_steps=max(int(t_max_dyn / dt_max) + 1, 1001)
@@ -1440,10 +1406,11 @@ def CZKM_app(
     # Plot
     with plt.rc_context():
         set_plot_style()
+        plt.rcParams["mathtext.fontset"] = "cm"
         plt.rcParams["axes.grid"] = False
 
         fig, axes = plt.subplots(2, 1, figsize=figsize, gridspec_kw=dict(hspace=hspace))
-        ax_F, ax_D = axes
+        ax_D, ax_F = axes
 
         ax_F.plot(
             gamma_tau[:cut],
@@ -1469,12 +1436,12 @@ def CZKM_app(
 
         ax_F.set_xlabel(r"$\gamma_0\tau$")
         ax_F.set_ylabel(r"$1 - F$")
-        ax_F.xaxis.set_label_coords(0.50, -0.18)
+        ax_F.xaxis.set_label_coords(0.50, -0.15)
         ax_F.yaxis.set_label_coords(-0.13, 0.50)
         ax_F.set_xscale("log")
         ax_F.set_yscale("log")
         ax_F.legend(frameon=False, loc="best")
-        ax_F.text(-0.18, 0.95, "(a)", transform=ax_F.transAxes, ha="left", va="bottom")
+        ax_F.text(-0.2, 0.95, "(b)", transform=ax_F.transAxes, ha="left", va="bottom")
 
         ax_D.plot(
             t_dyn_dde / tau,
@@ -1510,11 +1477,11 @@ def CZKM_app(
         )
         ax_D.set(xlim=(0, T), ylim=(-0.02, 1.02))
         ax_D.set_xlabel(r"$t/\tau$")
-        ax_D.set_ylabel("Population")
-        ax_D.xaxis.set_label_coords(0.50, -0.18)
+        ax_D.set_ylabel(r"$\langle \sigma^+ \sigma \rangle$")
+        ax_D.xaxis.set_label_coords(0.50, -0.15)
         ax_D.yaxis.set_label_coords(-0.13, 0.50)
         ax_D.legend(frameon=False, loc="best")
-        ax_D.text(-0.18, 0.95, "(b)", transform=ax_D.transAxes, ha="left", va="bottom")
+        ax_D.text(-0.2, 0.95, "(a)", transform=ax_D.transAxes, ha="left", va="bottom")
 
         fig.subplots_adjust(left=0.14, right=0.98, top=0.98, bottom=0.14, hspace=hspace)
 
@@ -1527,41 +1494,26 @@ def CZKM_app(
             plt.close(fig)
 
 
-def fig_paper_QST_and_IF_vs_T(
+def fig_paper_IF_vs_T(
     data0="swap_qst.npz",
     data1="stirap_qst.npz",
     ww_data="expt_009_renormalized_WW_fidelity.npz",
     czkm_data="czkm_qst.npz",
-    kappa=0.1,
     tau=1.0,
-    gamma=0.1,
-    T_dyn=200.0,
-    dt_max=0.01,
-    phi=0.0,
-    figsize=(7.2, 3.0),
+    figsize=(7.2, 2.2),
     save=None,
     dpi=600,
-    hspace=0.12,
 ):
-    """Two-panel figure: infidelity vs duration above, link loss vs duration below."""
-
-    # ----------------- helpers -----------------
-    def panel(axis, lab, xy=(-0.18, 0.95), fs=16):
-        """Add a panel label with the paper's placement convention."""
-        axis.text(
-            *xy, lab, transform=axis.transAxes, ha="left", va="bottom", fontsize=fs
-        )
+    """Plot the transfer infidelity comparison as a standalone figure."""
 
     def place_labels(axis, xlabel, ylabel, x=(-0.0, -0.12), y=(-0.12, 0.5)):
-        """Apply the label offsets used in the paper figure layout."""
         axis.set_xlabel(xlabel)
         axis.set_ylabel(ylabel)
         axis.xaxis.set_label_coords(0.5, x[1])
         axis.yaxis.set_label_coords(y[0], y[1])
 
-    def annot(ax, txt, x, y, xt, yt, ha="left", va="top"):
-        """Add a labeled arrow annotation in data coordinates."""
-        ax.annotate(
+    def annot(axis, txt, x, y, xt, yt, ha="left", va="top"):
+        axis.annotate(
             txt,
             xy=(x, y),
             xytext=(xt, yt),
@@ -1576,6 +1528,432 @@ def fig_paper_QST_and_IF_vs_T(
             ha=ha,
             va=va,
         )
+
+    swap_cache = np.load(data0)
+    stirap_cache = np.load(data1)
+    ww_cache = np.load(ww_data)
+    czkm_cache = np.load(czkm_data)
+
+    T_swap = swap_cache["T"] / tau
+    IF_swap = 1.0 - swap_cache["F"]
+    T_stirap = stirap_cache["T_opt"]
+    IF_stirap = 1.0 - stirap_cache["F_opt"]
+    gamma_stirap = stirap_cache["gamma"]
+    T_czkm = czkm_cache["T"] / tau
+    F_czkm = np.asarray(czkm_cache["F"], float)
+    IF_czkm = 1.0 - (F_czkm[:, 0] if F_czkm.ndim > 1 else F_czkm)
+    T_ww = ww_cache["T"]
+    D_ww = ww_cache["Delta"]
+    IF_ww = ww_cache["IF"].reshape(len(T_ww), len(D_ww))
+
+    cut_swap = len(T_swap)
+    cut_stirap = min(940, len(T_stirap))
+    cut_czkm = min(940, len(T_czkm))
+
+    with plt.rc_context():
+        set_plot_style()
+        plt.rcParams["mathtext.fontset"] = "cm"
+        plt.rcParams["axes.grid"] = False
+
+        fig, ax = plt.subplots(figsize=figsize)
+
+        ax.plot(
+            T_swap[:cut_swap],
+            IF_swap[:cut_swap],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["swap"],
+        )
+        ax.plot(
+            T_stirap[:cut_stirap],
+            IF_stirap[:cut_stirap],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["stirap"],
+        )
+        ax.plot(
+            T_stirap[:cut_stirap],
+            np.exp(-gamma_stirap[:cut_stirap] * (T_stirap[:cut_stirap] - 1)),
+            "--",
+            lw=1.6,
+            color=PLOT_COLORS["theory"],
+        )
+        ax.plot(
+            T_czkm[:cut_czkm],
+            IF_czkm[:cut_czkm],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["czkm"],
+        )
+
+        markers = ["o", "D", "^"]
+        sizes = [55, 40, 70]
+        edge_widths = [0.8, 0.8, 1.0]
+        colors = [
+            PLOT_COLORS["scatter_a"],
+            PLOT_COLORS["scatter_b"],
+            PLOT_COLORS["scatter_c"],
+        ]
+
+        for j, (col, marker, size, width) in enumerate(
+            zip(colors, markers, sizes, edge_widths)
+        ):
+            ax.scatter(
+                T_ww,
+                IF_ww[:, j],
+                s=size,
+                linewidths=width,
+                color=col,
+                edgecolor="white",
+                marker=marker,
+                label=rf"$\Delta:{D_ww[j]:g}$",
+                zorder=5,
+            )
+
+        i_swap = min(870, cut_swap - 1)
+        i_sti = min(518, cut_stirap - 1)
+        i_czkm = min(350, cut_czkm - 1)
+        annot(
+            ax,
+            "SWAP",
+            T_swap[i_swap],
+            IF_swap[i_swap],
+            T_swap[i_swap] * 1.2,
+            IF_swap[i_swap] * 0.05,
+        )
+        annot(
+            ax,
+            "STIRAP",
+            T_stirap[i_sti],
+            IF_stirap[i_sti],
+            T_stirap[i_sti] * 0.7,
+            IF_stirap[i_sti] * 2.5,
+            ha="right",
+        )
+        annot(
+            ax,
+            "CZKM",
+            T_czkm[i_czkm],
+            IF_czkm[i_czkm],
+            T_czkm[i_czkm] * 1.15,
+            IF_czkm[i_czkm] * 0.35,
+        )
+
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_ylim(1e-10, 1.2)
+        ax.legend(frameon=False, loc=(0.05, 0.02))
+        place_labels(ax, r"$T/\tau$", r"$1-F$")
+
+        fig.subplots_adjust(left=0.14, right=0.98, top=0.98, bottom=0.22)
+
+        if save is not None:
+            fig.savefig(save, dpi=dpi, bbox_inches="tight")
+        plt.show()
+
+
+def fig_paper_loss_vs_T(
+    data0="swap_qst.npz",
+    data1="stirap_qst.npz",
+    czkm_data="czkm_qst.npz",
+    kappa=0.1,
+    tau=1.0,
+    fit=True,
+    figsize=(7.2, 2.2),
+    save=None,
+    dpi=600,
+):
+    """Plot the link-loss comparison as a standalone figure."""
+
+    def place_labels(axis, xlabel, ylabel, x=(-0.0, -0.12), y=(-0.12, 0.5)):
+        axis.set_xlabel(xlabel)
+        axis.set_ylabel(ylabel)
+        axis.xaxis.set_label_coords(0.5, x[1])
+        axis.yaxis.set_label_coords(y[0], y[1])
+
+    def load_link_integral(cache):
+        if "N_link" in cache.files:
+            return np.asarray(cache["N_link"], float)
+        if "P_link_loss" in cache.files and "kappa" in cache.files:
+            return -np.log(
+                np.clip(np.asarray(cache["P_link_loss"], float), 1e-300, 1.0)
+            ) / float(cache["kappa"])
+        if "P_loss" in cache.files:
+            return np.asarray(cache["P_loss"], float)
+        raise KeyError(
+            "Cache does not contain N_link or a recoverable legacy loss field."
+        )
+
+    def fit_log_poly(x, y, degree=2):
+        x = np.asarray(x, float)
+        y = np.asarray(y, float)
+        valid = (x > 0) & (y > 0) & np.isfinite(x) & np.isfinite(y)
+        y_fit = np.full_like(x, np.nan, dtype=float)
+        coeffs = np.polyfit(np.log(x[valid]), np.log(y[valid]), degree)
+        y_fit[valid] = np.exp(np.polyval(coeffs, np.log(x[valid])))
+        return coeffs, y_fit
+
+    swap_cache = np.load(data0)
+    stirap_cache = np.load(data1)
+    czkm_cache = np.load(czkm_data)
+
+    T_swap = swap_cache["T"] / tau
+    T_stirap = stirap_cache["T_opt"]
+    T_czkm = czkm_cache["T"] / tau
+    loss_swap = 1.0 - np.exp(-kappa * load_link_integral(swap_cache))
+    loss_stirap = 1.0 - np.exp(-kappa * load_link_integral(stirap_cache))
+    loss_czkm = 1.0 - np.exp(-kappa * load_link_integral(czkm_cache))
+
+    cut_swap = len(T_swap)
+    cut_stirap = min(940, len(T_stirap))
+    cut_czkm = min(940, len(T_czkm))
+
+    with plt.rc_context():
+        set_plot_style()
+        plt.rcParams["mathtext.fontset"] = "cm"
+        plt.rcParams["axes.grid"] = False
+
+        fig, ax = plt.subplots(figsize=figsize)
+        coeff_swap = coeff_stirap = coeff_czkm = None
+        fit_swap = fit_stirap = fit_czkm = None
+        if fit:
+            coeff_swap, fit_swap = fit_log_poly(T_swap[:cut_swap], loss_swap[:cut_swap])
+            coeff_stirap, fit_stirap = fit_log_poly(
+                T_stirap[:cut_stirap], loss_stirap[:cut_stirap]
+            )
+            coeff_czkm, fit_czkm = fit_log_poly(T_czkm[:cut_czkm], loss_czkm[:cut_czkm])
+
+        ax.plot(
+            T_swap[:cut_swap],
+            loss_swap[:cut_swap],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["swap"],
+            label="SWAP",
+        )
+        ax.plot(
+            T_stirap[:cut_stirap],
+            loss_stirap[:cut_stirap],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["stirap"],
+            label="STIRAP",
+        )
+        ax.plot(
+            T_czkm[:cut_czkm],
+            loss_czkm[:cut_czkm],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["czkm"],
+            label="CZKM",
+        )
+        if fit:
+            ax.plot(
+                T_swap[:cut_swap],
+                fit_swap,
+                "--",
+                lw=1.6,
+                color=PLOT_COLORS["swap"],
+                alpha=0.8,
+            )
+            ax.plot(
+                T_stirap[:cut_stirap],
+                fit_stirap,
+                "--",
+                lw=1.6,
+                color=PLOT_COLORS["stirap"],
+                alpha=0.8,
+            )
+            ax.plot(
+                T_czkm[:cut_czkm],
+                fit_czkm,
+                "--",
+                lw=1.6,
+                color=PLOT_COLORS["czkm"],
+                alpha=0.8,
+            )
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.legend(frameon=False, loc="best")
+        place_labels(ax, r"$T/\tau$", r"$\varepsilon_{\rm loss}$")
+
+        fig.subplots_adjust(left=0.14, right=0.98, top=0.98, bottom=0.22)
+
+        if save is not None:
+            fig.savefig(save, dpi=dpi, bbox_inches="tight")
+        plt.show()
+
+    def format_log_poly(name, coeffs):
+        degree = len(coeffs) - 1
+        terms = []
+        for power, coef in zip(range(degree, -1, -1), coeffs):
+            if power == 0:
+                terms.append(f"{coef:.6g}")
+            elif power == 1:
+                terms.append(f"{coef:.6g}*log(T/tau)")
+            else:
+                terms.append(f"{coef:.6g}*(log(T/tau))^{power}")
+        print(f"[{name}] log(P_loss) ~= {' + '.join(terms).replace('+ -', '- ')}")
+
+    if fit:
+        format_log_poly("SWAP", coeff_swap)
+        format_log_poly("STIRAP", coeff_stirap)
+        format_log_poly("CZKM", coeff_czkm)
+
+
+def fig_paper_loss_vs_T_poly(
+    data0="swap_qst.npz",
+    data1="stirap_qst.npz",
+    czkm_data="czkm_qst.npz",
+    kappa=0.1,
+    tau=1.0,
+    degree=2,
+    fit_min=None,
+    fit_max=None,
+    figsize=(4.3, 3),
+    save=None,
+    dpi=600,
+):
+    """Plot the link loss together with power-law fits in T/tau."""
+
+    def place_labels(axis, xlabel, ylabel, x=(-0.0, -0.12), y=(-0.12, 0.5)):
+        axis.set_xlabel(xlabel)
+        axis.set_ylabel(ylabel)
+        axis.xaxis.set_label_coords(0.5, x[1])
+        axis.yaxis.set_label_coords(y[0], y[1])
+
+    def load_link_integral(cache):
+        if "N_link" in cache.files:
+            return np.asarray(cache["N_link"], float)
+        if "P_link_loss" in cache.files and "kappa" in cache.files:
+            return -np.log(
+                np.clip(np.asarray(cache["P_link_loss"], float), 1e-300, 1.0)
+            ) / float(cache["kappa"])
+        if "P_loss" in cache.files:
+            return np.asarray(cache["P_loss"], float)
+        raise KeyError(
+            "Cache does not contain N_link or a recoverable legacy loss field."
+        )
+
+    def fit_power_law(x, y):
+        x = np.asarray(x, float)
+        y = np.asarray(y, float)
+        valid = (x > 0) & (y > 0) & np.isfinite(x) & np.isfinite(y)
+        fit_valid = valid.copy()
+        if fit_min is not None:
+            fit_valid &= x >= fit_min
+        if fit_max is not None:
+            fit_valid &= x <= fit_max
+        coeffs = np.polyfit(np.log(x[fit_valid]), np.log(y[fit_valid]), 1)
+        y_fit = np.full_like(x, np.nan, dtype=float)
+        y_fit[valid] = np.exp(coeffs[1]) * x[valid] ** coeffs[0]
+        return coeffs, y_fit
+
+    swap_cache = np.load(data0)
+    stirap_cache = np.load(data1)
+    czkm_cache = np.load(czkm_data)
+
+    T_swap = swap_cache["T"] / tau
+    T_stirap = stirap_cache["T_opt"]
+    T_czkm = czkm_cache["T"] / tau
+    loss_swap = 1.0 - np.exp(-kappa * load_link_integral(swap_cache))
+    loss_stirap = 1.0 - np.exp(-kappa * load_link_integral(stirap_cache))
+    loss_czkm = 1.0 - np.exp(-kappa * load_link_integral(czkm_cache))
+
+    cut_swap = len(T_swap)
+    cut_stirap = min(900, len(T_stirap))
+    cut_czkm = min(900, len(T_czkm))
+
+    coeff_swap, fit_swap = fit_power_law(T_swap[:cut_swap], loss_swap[:cut_swap])
+    coeff_stirap, fit_stirap = fit_power_law(
+        T_stirap[:cut_stirap], loss_stirap[:cut_stirap]
+    )
+    coeff_czkm, fit_czkm = fit_power_law(T_czkm[:cut_czkm], loss_czkm[:cut_czkm])
+
+    with plt.rc_context():
+        set_plot_style()
+        plt.rcParams["mathtext.fontset"] = "cm"
+        plt.rcParams["axes.grid"] = False
+
+        fig, ax = plt.subplots(figsize=figsize)
+
+        ax.plot(
+            T_swap[:cut_swap],
+            loss_swap[:cut_swap],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["swap"],
+            label="SWAP",
+        )
+        ax.plot(
+            T_stirap[:cut_stirap],
+            loss_stirap[:cut_stirap],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["stirap"],
+            label="STIRAP",
+        )
+        ax.plot(
+            T_czkm[:cut_czkm],
+            loss_czkm[:cut_czkm],
+            "-",
+            lw=2.0,
+            color=PLOT_COLORS["czkm"],
+            label="CZKM",
+        )
+        ax.plot(
+            T_swap[:cut_swap],
+            fit_swap,
+            "--",
+            lw=1.6,
+            color=PLOT_COLORS["swap"],
+            alpha=0.8,
+        )
+        ax.plot(
+            T_stirap[:cut_stirap],
+            fit_stirap,
+            "--",
+            lw=1.6,
+            color=PLOT_COLORS["stirap"],
+            alpha=0.8,
+        )
+        ax.plot(
+            T_czkm[:cut_czkm],
+            fit_czkm,
+            "--",
+            lw=1.6,
+            color=PLOT_COLORS["czkm"],
+            alpha=0.8,
+        )
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.legend(frameon=False, loc="best")
+        place_labels(ax, r"$T/\tau$", r"$\varepsilon_{\rm loss}$")
+
+        fig.subplots_adjust(left=0.14, right=0.98, top=0.98, bottom=0.22)
+
+        if save is not None:
+            fig.savefig(save, dpi=dpi, bbox_inches="tight")
+        plt.show()
+
+    def format_power_law(name, coeffs):
+        alpha, log_c = coeffs
+        print(f"[{name}] P_loss ~= {np.exp(log_c):.6g} * (T/tau)^({alpha:.6g})")
+
+    format_power_law("SWAP", coeff_swap)
+    format_power_law("STIRAP", coeff_stirap)
+    format_power_law("CZKM", coeff_czkm)
+
+
+def fitting_linkloss(
+    data0="swap_qst.npz",
+    data1="stirap_qst.npz",
+    ww_data="expt_009_renormalized_WW_fidelity.npz",
+    czkm_data="czkm_qst.npz",
+    kappa=0.1,
+    tau=1.0,
+):
+    # ----------------- helpers -----------------
 
     def load_link_integral(cache):
         """Load the integrated link occupancy from current or legacy cache fields."""
@@ -1621,144 +1999,26 @@ def fig_paper_QST_and_IF_vs_T(
     loss_swap = 1 - np.exp(-kappa * N_link_swap)
     loss_stirap = 1 - np.exp(-kappa * N_link_stirap)
     loss_czkm = 1 - np.exp(-kappa * N_link_czkm)
+    import numpy as np
 
-    # ===================== plot =====================
-    with plt.rc_context():
-        set_plot_style()
-        plt.rcParams["axes.grid"] = False
+    def fit_log_series(x, y, degree=2, mask_positive=True):
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
 
-        fig, axes = plt.subplots(2, 1, figsize=figsize, gridspec_kw=dict(hspace=hspace))
-        ax0, ax1 = axes
+        if mask_positive:
+            valid_mask = (x > 0) & (y > 0) & np.isfinite(x) & np.isfinite(y)
+        else:
+            valid_mask = np.isfinite(x) & np.isfinite(y)
 
-        # ---- (a) infidelity ----
-        ax0.plot(
-            T_swap[:cut_swap],
-            IF_swap[:cut_swap],
-            "-",
-            lw=2.0,
-            color=PLOT_COLORS["swap"],
-        )
-        ax0.plot(
-            T_stirap[:cut_stirap],
-            IF_stirap[:cut_stirap],
-            "-",
-            lw=2.0,
-            color=PLOT_COLORS["stirap"],
-        )
-        ax0.plot(
-            T_stirap[:cut_stirap],
-            np.exp(-gamma_stirap[:cut_stirap] * (T_stirap[:cut_stirap] - 1)),
-            "--",
-            lw=1.6,
-            color=PLOT_COLORS["theory"],
-        )
-        ax0.plot(
-            T_czkm[:cut_czkm],
-            IF_czkm[:cut_czkm],
-            "-",
-            lw=2.0,
-            color=PLOT_COLORS["czkm"],
-        )
+        x_valid = x[valid_mask]
+        y_valid = y[valid_mask]
 
-        markers = ["o", "D", "^"]
-        sizes = [55, 40, 70]
-        edge_widths = [0.8, 0.8, 1.0]
-        colors = [
-            PLOT_COLORS["scatter_a"],
-            PLOT_COLORS["scatter_b"],
-            PLOT_COLORS["scatter_c"],
-        ]
+        logx = np.log(x_valid)
+        logy = np.log(y_valid)
 
-        for j, (col, marker, s, ew) in enumerate(
-            zip(colors, markers, sizes, edge_widths)
-        ):
-            ax0.scatter(
-                T_ww,
-                IF_ww[:, j],
-                s=s,
-                linewidths=ew,
-                color=col,
-                edgecolor="white",
-                marker=marker,
-                label=rf"$\Delta:{D_ww[j]:g}$",
-                zorder=5,
-            )
+        coeffs = np.polyfit(logx, logy, degree)
 
-        i_swap = min(870, cut_swap - 1)
-        i_sti = min(518, cut_stirap - 1)
-        i_czkm = min(350, cut_czkm - 1)
-        annot(
-            ax0,
-            "SWAP",
-            T_swap[i_swap],
-            IF_swap[i_swap],
-            T_swap[i_swap] * 1.2,
-            IF_swap[i_swap] * 0.05,
-            ha="left",
-            va="top",
-        )
-        annot(
-            ax0,
-            "STIRAP",
-            T_stirap[i_sti],
-            IF_stirap[i_sti],
-            T_stirap[i_sti] * 0.7,
-            IF_stirap[i_sti] * 2.5,
-            ha="right",
-            va="top",
-        )
-        annot(
-            ax0,
-            "CZKM",
-            T_czkm[i_czkm],
-            IF_czkm[i_czkm],
-            T_czkm[i_czkm] * 1.15,
-            IF_czkm[i_czkm] * 0.35,
-            ha="left",
-            va="top",
-        )
+        y_fit = np.full_like(x, np.nan, dtype=float)
+        y_fit[valid_mask] = np.exp(np.polyval(coeffs, np.log(x_valid)))
 
-        ax0.set_xscale("log")
-        ax0.set_yscale("log")
-        ax0.set_ylim(1e-10, 1.2)
-        ax0.legend(frameon=False, loc=(0.05, 0.02))
-        place_labels(ax0, r"$T/\tau$", r"$1-F$")
-        panel(ax0, "(a)")
-
-        # ---- (b) link loss ----
-        ax1.plot(
-            T_swap[:cut_swap],
-            loss_swap[:cut_swap],
-            "-",
-            lw=2.0,
-            color=PLOT_COLORS["swap"],
-            label="SWAP",
-        )
-        ax1.plot(
-            T_stirap[:cut_stirap],
-            loss_stirap[:cut_stirap],
-            "-",
-            lw=2.0,
-            color=PLOT_COLORS["stirap"],
-            label="STIRAP",
-        )
-        ax1.plot(
-            T_czkm[:cut_czkm],
-            loss_czkm[:cut_czkm],
-            "-",
-            lw=2.0,
-            color=PLOT_COLORS["czkm"],
-            label="CZKM",
-        )
-        ax1.set_xscale("log")
-        # ax1.set_yscale("log")
-        # ax1.set_ylim(1e-10, 1)
-        ax1.legend(frameon=False, loc="best")
-        place_labels(ax1, r"$T/\tau$", r"$P_{loss}$")
-        panel(ax1, "(b)")
-
-        fig.subplots_adjust(left=0.14, right=0.98, top=0.98, bottom=0.14, hspace=hspace)
-
-        if save is not None:
-            fig.savefig(save, dpi=dpi, bbox_inches="tight")
-        plt.show()
+        return coeffs, y_fit, valid_mask
