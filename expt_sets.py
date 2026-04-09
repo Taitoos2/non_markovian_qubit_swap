@@ -330,7 +330,7 @@ def swap_appendix_graph(
         )
         # axis.grid(True, which="both", alpha=0.30)
         axis.legend(frameon=False)
-        place_labels(axis, r"$t/\tau$", r"$\langle \sigma^+ \sigma \rangle$")
+        place_labels(axis, r"$t/\tau$", r"$\langle \sigma^+ \sigma^- \rangle$")
         panel(axis, "(a)")
 
         # ========== (b) T_opt vs gamma ==========
@@ -1518,7 +1518,7 @@ def CZKM_app(
         )
         ax_D.set(xlim=(0, T), ylim=(-0.02, 1.02))
         ax_D.set_xlabel(r"$t/\tau$")
-        ax_D.set_ylabel(r"$\langle \sigma^+ \sigma \rangle$")
+        ax_D.set_ylabel(r"$\langle \sigma^+ \sigma^- \rangle$")
         ax_D.xaxis.set_label_coords(0.50, -0.15)
         ax_D.yaxis.set_label_coords(-0.13, 0.50)
         ax_D.legend(frameon=False, loc="best")
